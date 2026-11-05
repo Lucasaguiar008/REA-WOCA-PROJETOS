@@ -1,0 +1,796 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lucas Aguiar — Plataforma de Projetos Elétricos NBR 5410</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <!-- ==================== TELA DE LOGIN ==================== -->
+  <section id="loginScreen" class="view-screen login-screen">
+    <div class="login-grid-bg"></div>
+    <div class="login-card">
+      <!-- LOGO LUCAS AGUIAR -->
+      <div class="brand-logo">
+        <div class="brand-logo-mark">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+          </svg>
+        </div>
+        <div class="brand-logo-text">
+          <span class="brand-logo-title">LUCAS AGUIAR</span>
+          <span class="brand-logo-subtitle">Projetos Elétricos Cloud</span>
+        </div>
+      </div>
+
+      <div class="login-heading">
+        <h2>Acesse sua Conta Profissional</h2>
+        <p>Automação de Planta Baixa, Quadro de Cargas, Unifilar e Lista de Materiais (ABNT NBR 5410)</p>
+      </div>
+
+      <form id="loginForm">
+        <div class="form-group">
+          <label for="loginEmail">E-mail Profissional</label>
+          <input type="email" id="loginEmail" class="form-input" value="lucas.aguiar@engenharia.com.br" required />
+        </div>
+        <div class="form-group">
+          <label for="loginPassword">Senha</label>
+          <input type="password" id="loginPassword" class="form-input" value="••••••••••••" required />
+        </div>
+        <button type="submit" class="btn btn-primary btn-block" style="margin-top: 8px;">
+          Entrar em /projetos
+        </button>
+      </form>
+    </div>
+  </section>
+
+  <!-- ==================== TELA /PROJETOS (DASHBOARD PRINCIPAL) ==================== -->
+  <section id="dashboardScreen" class="view-screen active">
+    <header class="top-navbar">
+      <div class="navbar-left">
+        <!-- LOGO LUCAS AGUIAR -->
+        <div class="brand-logo" onclick="App.switchScreen('dashboardScreen')">
+          <div class="brand-logo-mark">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+            </svg>
+          </div>
+          <div class="brand-logo-text">
+            <span class="brand-logo-title">LUCAS AGUIAR</span>
+            <span class="brand-logo-subtitle">Engenharia &amp; Projetos Elétricos</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="navbar-right">
+        <input type="file" id="importProjectJsonInput" accept=".json" style="display:none" />
+        <button class="btn btn-secondary btn-sm" onclick="document.getElementById('importProjectJsonInput').click()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          Importar Projeto (.json)
+        </button>
+        <button class="btn btn-secondary btn-sm" onclick="App.resetDemoProjects()">
+          Restaurar Exemplos
+        </button>
+        <div class="user-pill">
+          <div class="user-avatar">LA</div>
+          <div class="user-meta">
+            <span class="user-meta-name" id="navUserName">Lucas Aguiar</span>
+            <span class="user-meta-plan">PRO • NBR 5410</span>
+          </div>
+        </div>
+        <button class="btn btn-secondary btn-sm" onclick="App.switchScreen('loginScreen')" title="Alternar Conta / Tela de Login">
+          Sair
+        </button>
+      </div>
+    </header>
+
+    <main class="dashboard-body">
+      <div class="dashboard-hero">
+        <div>
+          <h1>Meus Projetos Elétricos (/projetos)</h1>
+          <p>Gerencie plantas baixas 2D/3D, dimensionamento automático de condutores e disjuntores, diagramas unifilares e listas de materiais.</p>
+        </div>
+        <button class="btn btn-primary" onclick="App.openNewProjectModal()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          Novo Projeto Elétrico
+        </button>
+      </div>
+
+      <!-- Indicadores Globais -->
+      <div class="dashboard-stats">
+        <div class="stat-card">
+          <div class="stat-icon" style="background:rgba(245,158,11,0.16); color:#f59e0b;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+          </div>
+          <div class="stat-info">
+            <span class="stat-value" id="statProjectsCount">3</span>
+            <span class="stat-label">Projetos Ativos na Nuvem</span>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon" style="background:rgba(56,189,248,0.16); color:#38bdf8;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+          </div>
+          <div class="stat-info">
+            <span class="stat-value" id="statTotalArea">0 m²</span>
+            <span class="stat-label">Área Total Projetada</span>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon" style="background:rgba(16,185,129,0.16); color:#10b981;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+          </div>
+          <div class="stat-info">
+            <span class="stat-value" id="statTotalPower">0 kVA</span>
+            <span class="stat-label">Potência Instalada Total</span>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon" style="background:rgba(168,85,247,0.16); color:#a855f7;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+          </div>
+          <div class="stat-info">
+            <span class="stat-value" id="statTotalRooms">0 cômodos</span>
+            <span class="stat-label">Verificados pela NBR 5410</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Barra de Busca e Filtros -->
+      <div class="dashboard-toolbar">
+        <div class="search-box">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input type="text" id="projectSearchInput" placeholder="Buscar projeto por nome, cliente ou endereço..." />
+        </div>
+        <div class="filter-pills">
+          <button class="filter-pill active" data-filter="Todos">Todos os Projetos</button>
+          <button class="filter-pill" data-filter="Residencial">Residencial</button>
+          <button class="filter-pill" data-filter="Comercial">Comercial</button>
+        </div>
+      </div>
+
+      <!-- Grade de Projetos -->
+      <div id="projectsGrid" class="projects-grid"></div>
+    </main>
+  </section>
+
+  <!-- ==================== STUDIO DE PROJETO ELÉTRICO ==================== -->
+  <section id="editorScreen" class="view-screen">
+    <header class="editor-header">
+      <div class="editor-header-left">
+        <button class="btn btn-secondary btn-sm" onclick="App.backToDashboard()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+          /projetos
+        </button>
+
+        <!-- Mini Brand -->
+        <div class="brand-logo" onclick="App.backToDashboard()" style="margin-right:6px;">
+          <div class="brand-logo-mark" style="width:32px; height:32px;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+          </div>
+          <div class="brand-logo-text">
+            <span class="brand-logo-title" style="font-size:14px;">LUCAS AGUIAR</span>
+          </div>
+        </div>
+
+        <div class="cad-divider"></div>
+
+        <div class="project-Breadcrumb">
+          <div class="project-Breadcrumb-title">
+            <span id="editorProjectTitle">Projeto Elétrico</span>
+            <span class="badge badge-amber">NBR 5410</span>
+          </div>
+          <div class="project-Breadcrumb-sub" id="editorProjectSub">Carregando parâmetros...</div>
+        </div>
+      </div>
+
+      <!-- Abas do Studio -->
+      <nav class="editor-tabs">
+        <button class="editor-tab active" data-tab="tab2d" onclick="App.switchEditorTab('tab2d')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+          Planta Baixa 2D
+        </button>
+        <button class="editor-tab" data-tab="tab3d" onclick="App.switchEditorTab('tab3d')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+          Visão 3D
+        </button>
+        <button class="editor-tab" data-tab="tabRooms" onclick="App.switchEditorTab('tabRooms')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+          Ambientes &amp; Cargas
+        </button>
+        <button class="editor-tab" data-tab="tabCircuits" onclick="App.switchEditorTab('tabCircuits')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+          Circuitos
+        </button>
+        <button class="editor-tab" data-tab="tabBoard" onclick="App.switchEditorTab('tabBoard')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="2" width="16" height="20" rx="2"/><line x1="8" y1="6" x2="16" y2="6"/><line x1="8" y1="10" x2="16" y2="10"/><line x1="8" y1="14" x2="12" y2="14"/></svg>
+          Quadro &amp; Unifilar
+        </button>
+        <button class="editor-tab" data-tab="tabMaterials" onclick="App.switchEditorTab('tabMaterials')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+          Lista de Materiais
+        </button>
+      </nav>
+
+      <div class="navbar-right">
+        <div style="display:flex; align-items:center; gap:5px;">
+          <button class="btn btn-secondary btn-icon js-btn-undo" onclick="CAD2D.undo()" title="Reverter última ação (Ctrl+Z)" disabled>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/></svg>
+          </button>
+          <button class="btn btn-secondary btn-icon js-btn-redo" onclick="CAD2D.redo()" title="Refazer ação (Ctrl+Y)" disabled>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 7v6h-6"/><path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3l3 2.7"/></svg>
+          </button>
+          <button class="btn btn-secondary btn-icon js-btn-copy" onclick="CAD2D.copySelected()" title="Copiar objeto ou ambiente selecionado (Ctrl+C)" disabled>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          </button>
+          <button class="btn btn-secondary btn-icon js-btn-paste" onclick="CAD2D.pasteClipboard()" title="Colar objeto ou ambiente (Ctrl+V)" disabled>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg>
+          </button>
+        </div>
+        <div class="cad-divider"></div>
+        <button class="btn btn-secondary btn-sm" onclick="App.exportCurrentProjectJSON()" title="Salvar arquivo do projeto (.json)">
+          Salvar .JSON
+        </button>
+        <button class="btn btn-primary btn-sm" onclick="window.print()">
+          Imprimir / PDF
+        </button>
+      </div>
+    </header>
+
+    <div class="editor-workspace">
+      <!-- ==================== ABA 1: PLANTA BAIXA 2D CAD ==================== -->
+      <div id="tab2d" class="tab-pane active">
+        <aside class="cad-sidebar-left">
+          <div class="sidebar-section">
+            <div class="sidebar-section-title">Automação Inteligente</div>
+            <button class="btn btn-primary btn-block btn-sm" onclick="App.runAutoGenerateNormative()" style="margin-bottom:8px;">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+              Lançamento Automático NBR 5410
+            </button>
+            <input type="file" id="floorplanFileInput" accept=".png,.jpg,.jpeg,.svg,.dxf" style="display:none" />
+            <button class="btn btn-secondary btn-block btn-sm" onclick="document.getElementById('floorplanFileInput').click()">
+              Importar Planta (DXF / Imagem)
+            </button>
+          </div>
+
+          <div class="sidebar-section">
+            <div class="sidebar-section-title">Navegação &amp; Arquitetura</div>
+            <div class="tool-grid">
+              <button class="tool-btn active" data-tool="select" onclick="App.selectCadTool('select', this)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51L3 3z"/></svg>
+                Selecionar / Editar
+              </button>
+              <button class="tool-btn" data-tool="pan" onclick="App.selectCadTool('pan', this)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 9l-3 3 3 3M9 5l3-3 3 3M15 19l-3 3-3-3M19 9l3 3-3 3M2 12h20M12 2v20"/></svg>
+                Arrastar Vista
+              </button>
+              <button class="tool-btn" id="btnDrawRoomTool" data-tool="add_room" onclick="App.selectCadTool('add_room', this)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+                Desenhar Cômodo
+              </button>
+              <button class="tool-btn" onclick="App.openAddRoomModal()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+                + Cômodo p/ Medida
+              </button>
+            </div>
+          </div>
+
+          <div class="sidebar-section">
+            <div class="sidebar-section-title">
+              <span>Cômodos da Planta</span>
+              <button class="btn btn-primary btn-sm" style="padding:2px 8px; font-size:11px;" onclick="App.openAddRoomModal()">+ Novo</button>
+            </div>
+            <div id="sidebarRoomList" class="layer-list" style="max-height:155px; overflow-y:auto;"></div>
+          </div>
+
+          <div class="sidebar-section">
+            <div class="sidebar-section-title">Simbologia NBR 5410 / 5444</div>
+            <div class="tool-grid">
+              <button class="tool-btn" data-tool="qdc" onclick="App.selectCadTool('qdc', this)" title="Quadro Parcial de Luz e Força Embutido">
+                <svg viewBox="0 0 28 22" fill="none">
+                  <rect x="2" y="4" width="24" height="14" stroke="#f59e0b" stroke-width="2" fill="#0b1120"/>
+                  <polygon points="2,18 26,4 26,18" fill="#f59e0b"/>
+                </svg>
+                Quadro (QDC)
+              </button>
+              <button class="tool-btn" data-tool="light" onclick="App.selectCadTool('light', this)" title="Ponto de Luz no Teto (Potência / Circuito / Comando)">
+                <svg viewBox="0 0 26 26" fill="none">
+                  <circle cx="13" cy="13" r="10" stroke="#fbbf24" stroke-width="2" fill="#0b1120"/>
+                  <line x1="3" y1="13" x2="23" y2="13" stroke="#fbbf24" stroke-width="1.5"/>
+                  <line x1="13" y1="13" x2="13" y2="23" stroke="#fbbf24" stroke-width="1.5"/>
+                </svg>
+                Luz no Teto
+              </button>
+              <button class="tool-btn" data-tool="switch" onclick="App.selectCadTool('switch', this)" title="Interruptor de 1 Seção (Símbolo NBR 5444)">
+                <svg viewBox="0 0 26 24" fill="none">
+                  <line x1="2" y1="12" x2="7" y2="12" stroke="#34d399" stroke-width="2"/>
+                  <circle cx="14" cy="12" r="7" stroke="#34d399" stroke-width="2" fill="#0b1120"/>
+                  <text x="14" y="15" fill="#6ee7b7" font-size="9" font-family="monospace" font-weight="bold" text-anchor="middle">a</text>
+                </svg>
+                Interruptor (a)
+              </button>
+              <button class="tool-btn" data-tool="tug_baixa" onclick="App.selectCadTool('tug_baixa', this)" title="Tomada Baixa (0.30m) - Triângulo Vazado c/ Haste">
+                <svg viewBox="0 0 28 24" fill="none">
+                  <line x1="3" y1="5" x2="3" y2="19" stroke="#38bdf8" stroke-width="2"/>
+                  <line x1="3" y1="12" x2="8" y2="12" stroke="#38bdf8" stroke-width="2"/>
+                  <polygon points="23,12 8,4 8,20" stroke="#38bdf8" stroke-width="2" fill="#0b1120"/>
+                </svg>
+                Tomada Baixa (0.3m)
+              </button>
+              <button class="tool-btn" data-tool="tug_media" onclick="App.selectCadTool('tug_media', this)" title="Tomada Média (1.30m) - Triângulo Meio Preenchido">
+                <svg viewBox="0 0 28 24" fill="none">
+                  <line x1="3" y1="5" x2="3" y2="19" stroke="#38bdf8" stroke-width="2"/>
+                  <line x1="3" y1="12" x2="8" y2="12" stroke="#38bdf8" stroke-width="2"/>
+                  <polygon points="23,12 8,4 8,20" fill="#0b1120"/>
+                  <polygon points="23,12 8,4 8,12" fill="#38bdf8"/>
+                  <polygon points="23,12 8,4 8,20" stroke="#38bdf8" stroke-width="2" fill="none"/>
+                </svg>
+                Tomada Média (1.3m)
+              </button>
+              <button class="tool-btn" data-tool="tue_alta" onclick="App.selectCadTool('tue_alta', this)" title="Tomada Alta / TUE (2.20m) - Triângulo Cheio">
+                <svg viewBox="0 0 28 24" fill="none">
+                  <line x1="3" y1="5" x2="3" y2="19" stroke="#f43f5e" stroke-width="2"/>
+                  <line x1="3" y1="12" x2="8" y2="12" stroke="#f43f5e" stroke-width="2"/>
+                  <polygon points="23,12 8,4 8,20" stroke="#fda4af" stroke-width="2" fill="#f43f5e"/>
+                </svg>
+                Tomada Alta (2.2m)
+              </button>
+              <button class="tool-btn" data-tool="conduit" style="grid-column: 1 / -1;" onclick="App.selectCadTool('conduit', this)" title="Eletroduto Embutido c/ Indicação de Fase, Neutro, Terra e Retorno">
+                <svg viewBox="0 0 36 22" fill="none">
+                  <path d="M2 18 Q 18 4 34 18" stroke="#f59e0b" stroke-width="2"/>
+                  <line x1="14" y1="5" x2="14" y2="16" stroke="#f8fafc" stroke-width="1.5"/>
+                  <line x1="14" y1="5" x2="11" y2="5" stroke="#f8fafc" stroke-width="1.5"/>
+                  <line x1="18" y1="5" x2="18" y2="16" stroke="#f8fafc" stroke-width="1.5"/>
+                  <line x1="22" y1="5" x2="22" y2="16" stroke="#f8fafc" stroke-width="1.5"/>
+                  <line x1="19.5" y1="5" x2="24.5" y2="5" stroke="#f8fafc" stroke-width="1.5"/>
+                </svg>
+                Eletroduto + Condutores (F / N / PE)
+              </button>
+            </div>
+          </div>
+
+          <div class="sidebar-section">
+            <div class="sidebar-section-title">Camadas Visíveis</div>
+            <div class="layer-list">
+              <label class="layer-toggle">
+                <span class="layer-toggle-left"><span class="layer-dot" style="background:#94a3b8"></span>Arquitetura / Paredes</span>
+                <input type="checkbox" checked onchange="App.toggleCadLayer('architecture', this)" />
+              </label>
+              <label class="layer-toggle">
+                <span class="layer-toggle-left"><span class="layer-dot" style="background:#f59e0b"></span>Eletrodutos &amp; Fiação</span>
+                <input type="checkbox" checked onchange="App.toggleCadLayer('conduits', this)" />
+              </label>
+              <label class="layer-toggle">
+                <span class="layer-toggle-left"><span class="layer-dot" style="background:#fbbf24"></span>Iluminação &amp; Comandos</span>
+                <input type="checkbox" checked onchange="App.toggleCadLayer('lighting', this)" />
+              </label>
+              <label class="layer-toggle">
+                <span class="layer-toggle-left"><span class="layer-dot" style="background:#38bdf8"></span>Tomadas TUG / TUE</span>
+                <input type="checkbox" checked onchange="App.toggleCadLayer('outlets', this)" />
+              </label>
+              <label class="layer-toggle">
+                <span class="layer-toggle-left"><span class="layer-dot" style="background:#e2e8f0"></span>Etiquetas e Condutores</span>
+                <input type="checkbox" checked onchange="App.toggleCadLayer('labels', this)" />
+              </label>
+              <label class="layer-toggle">
+                <span class="layer-toggle-left"><span class="layer-dot" style="background:#64748b"></span>Cotas de Dimensão</span>
+                <input type="checkbox" checked onchange="App.toggleCadLayer('dimensions', this)" />
+              </label>
+            </div>
+          </div>
+        </aside>
+
+        <!-- Área Central do Canvas 2D -->
+        <div class="cad-viewport">
+          <div class="cad-floating-toolbar">
+            <!-- Ícones Superiores de Reverter, Refazer, Copiar, Colar e Excluir -->
+            <button class="btn btn-secondary btn-icon js-btn-undo" onclick="CAD2D.undo()" title="Reverter (Ctrl+Z)" disabled>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/></svg>
+              <span>Reverter</span>
+              <span class="kbd-hint">Ctrl+Z</span>
+            </button>
+            <button class="btn btn-secondary btn-icon js-btn-redo" onclick="CAD2D.redo()" title="Refazer (Ctrl+Y)" disabled>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 7v6h-6"/><path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3l3 2.7"/></svg>
+              <span>Refazer</span>
+              <span class="kbd-hint">Ctrl+Y</span>
+            </button>
+            <div class="cad-divider"></div>
+            <button class="btn btn-secondary btn-icon js-btn-copy" onclick="CAD2D.copySelected()" title="Copiar Objeto ou Ambiente (Ctrl+C)" disabled>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              <span>Copiar</span>
+              <span class="kbd-hint">Ctrl+C</span>
+            </button>
+            <button class="btn btn-secondary btn-icon js-btn-paste" onclick="CAD2D.pasteClipboard()" title="Colar Objeto ou Ambiente (Ctrl+V)" disabled>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg>
+              <span>Colar</span>
+              <span class="kbd-hint">Ctrl+V</span>
+            </button>
+            <button class="btn btn-danger btn-icon js-btn-delete" onclick="CAD2D.deleteSelectedItem()" title="Excluir Item Selecionado (Delete)" disabled>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>
+            </button>
+            <div class="cad-divider"></div>
+            <button class="btn btn-primary btn-sm" onclick="App.openAddRoomModal()">+ Cômodo</button>
+            <button class="btn btn-secondary btn-sm" onclick="CAD2D.zoomBy(1.18)" title="Mais Zoom">+</button>
+            <button class="btn btn-secondary btn-sm" onclick="CAD2D.zoomBy(0.84)" title="Menos Zoom">−</button>
+            <button class="btn btn-secondary btn-sm" onclick="CAD2D.fitToView()">Centralizar</button>
+          </div>
+
+          <div class="cad-canvas-container">
+            <canvas id="cad2dCanvas"></canvas>
+          </div>
+
+          <div class="cad-statusbar">
+            <div class="cad-statusbar-group">
+              <span id="statusCoords">X: 0.00m | Y: 0.00m</span>
+              <span id="statusZoom">Escala: 100%</span>
+            </div>
+            <div class="cad-statusbar-group">
+              <span>Atalhos: <strong>Ctrl+Z</strong> Reverter | <strong>Ctrl+Y</strong> Refazer | <strong>Ctrl+C</strong> Copiar | <strong>Ctrl+V</strong> Colar | <strong>Ctrl+D</strong> Duplicar | <strong>R</strong> Girar | <strong>Del</strong> Excluir</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Inspetor de Propriedades Direito -->
+        <aside class="cad-sidebar-right" id="propertyInspectorContent"></aside>
+      </div>
+
+      <!-- ==================== ABA 2: VISUALIZAÇÃO 3D INTERATIVA (FAMÍLIAS REVIT MEP) ==================== -->
+      <div id="tab3d" class="tab-pane">
+        <div class="cad-viewport">
+          <div class="cad-floating-toolbar">
+            <span style="font-size:12px; font-weight:700; color:var(--brand-primary); padding:0 6px;">Vista 3D BIM (Famílias Revit MEP)</span>
+            <div class="cad-divider"></div>
+            <label style="font-size:12px; display:flex; align-items:center; gap:6px;">
+              Estilo Visual:
+              <select class="form-select" style="padding:4px 8px; font-size:12px; width:auto;" onchange="Viewer3D.setVisualStyle(this.value)">
+                <option value="realistic">Realista (Revit MEP)</option>
+                <option value="shaded">Sombreado (Cores Consistentes)</option>
+                <option value="wireframe">Estrutura de Arame (Raio-X)</option>
+              </select>
+            </label>
+            <div class="cad-divider"></div>
+            <label style="font-size:12px; display:flex; align-items:center; gap:6px;">
+              Opacidade Paredes:
+              <input type="range" min="0" max="0.75" step="0.05" value="0.26" oninput="Viewer3D.setWallOpacity(this.value)" />
+            </label>
+            <div class="cad-divider"></div>
+            <button class="btn btn-secondary btn-sm" onclick="Viewer3D.toggleLightCones()">Feixes LED</button>
+            <button class="btn btn-secondary btn-sm" onclick="Viewer3D.resetCamera()">Vista Isométrica</button>
+          </div>
+
+          <div class="cad-canvas-container">
+            <canvas id="cad3dCanvas"></canvas>
+          </div>
+
+          <div class="cad-statusbar">
+            <div class="cad-statusbar-group">
+              <span>Orbitar: Arrastar Esq. | Mover: Shift+Arrastar | ViewCube: Clique em TOPO/FRENTE/DIR</span>
+            </div>
+            <div class="cad-statusbar-group">
+              <span style="color:#eab308">■ Caixa 4x2" + Placa NBR 14136 (3 Furos)</span>
+              <span style="color:#dc2626">■ Módulo 20A Vermelho (TUE/600VA)</span>
+              <span style="color:#fde047">● Caixa Octogonal + Plafon LED</span>
+              <span style="color:#f59e0b">■ Quadro QDC c/ Disjuntores DIN</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ==================== ABA 3: AMBIENTES & CARGAS (NBR 5410) ==================== -->
+      <div id="tabRooms" class="tab-pane">
+        <div class="panel-scroll-container">
+          <div class="panel-header-bar">
+            <div>
+              <h2>Levantamento de Ambientes e Previsão de Cargas (ABNT NBR 5410)</h2>
+              <p>Edite diretamente o nome, tipo e dimensões de cada cômodo abaixo ou adicione novos ambientes ao projeto.</p>
+            </div>
+            <div style="display:flex; gap:10px;" class="no-print">
+              <button class="btn btn-secondary" onclick="App.openAddRoomModal()">
+                + Adicionar Novo Cômodo
+              </button>
+              <button class="btn btn-primary" onclick="App.runAutoGenerateNormative()">
+                Recalcular Todos pela NBR 5410
+              </button>
+            </div>
+          </div>
+
+          <div class="data-card">
+            <div class="data-card-header">
+              <span>Quadro de Previsão de Cargas por Ambiente</span>
+              <span class="badge badge-amber">Verificação Normativa Automática</span>
+            </div>
+            <div class="table-responsive">
+              <table class="tech-table">
+                <thead>
+                  <tr>
+                    <th>Ambiente</th>
+                    <th>Classificação NBR 5410</th>
+                    <th>Dimensões</th>
+                    <th>Área (m²)</th>
+                    <th>Perímetro (m)</th>
+                    <th>Iluminação Instalada (Mín.)</th>
+                    <th>Tomadas TUG Instaladas (Mín.)</th>
+                    <th>Tomadas Específicas (TUE)</th>
+                    <th>Status Normativo</th>
+                  </tr>
+                </thead>
+                <tbody id="roomsTableBody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ==================== ABA 4: CIRCUITOS & DIMENSIONAMENTO ==================== -->
+      <div id="tabCircuits" class="tab-pane">
+        <div class="panel-scroll-container">
+          <div class="panel-header-bar">
+            <div>
+              <h2>Dimensionamento de Circuitos, Condutores e Proteção (NBR 5410)</h2>
+              <p>Método de instalação B1 (eletroduto embutido em alvenaria), fatores de agrupamento, limite de queda de tensão (4%) e coordenação Ib ≤ In ≤ Iz.</p>
+            </div>
+            <div style="display:flex; gap:10px;" class="no-print">
+              <button class="btn btn-secondary" onclick="App.addNewCircuit()">+ Adicionar Circuito</button>
+              <button class="btn btn-primary" onclick="App.runAutoBalancePhases()">Balancear Fases (R, S, T)</button>
+            </div>
+          </div>
+
+          <div class="data-card">
+            <div class="data-card-header">
+              <span>Tabela de Dimensionamento Técnico dos Circuitos Terminais</span>
+              <span class="badge badge-blue">Cobre PVC 70°C • Método B1</span>
+            </div>
+            <div class="table-responsive">
+              <table class="tech-table">
+                <thead>
+                  <tr>
+                    <th>Circ.</th>
+                    <th>Descrição do Circuito</th>
+                    <th>Tipo</th>
+                    <th>Tensão</th>
+                    <th>Pontos</th>
+                    <th>Potência</th>
+                    <th>Ib (A)</th>
+                    <th>FCA</th>
+                    <th>Seção Condutor</th>
+                    <th>Queda ΔV%</th>
+                    <th>Disjuntor DIN</th>
+                    <th>DR 30mA</th>
+                    <th>Fase</th>
+                    <th>Conformidade</th>
+                  </tr>
+                </thead>
+                <tbody id="circuitsTableBody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ==================== ABA 5: QUADRO DE CARGAS & DIAGRAMA UNIFILAR ==================== -->
+      <div id="tabBoard" class="tab-pane">
+        <div class="panel-scroll-container">
+          <div class="panel-header-bar">
+            <div>
+              <h2>Quadro de Distribuição (QDC), Equilíbrio de Fases e Diagrama Unifilar</h2>
+              <p>Geração automática do esquema unifilar completo com Disjuntor Geral, IDR 30mA, DPS Classe II (aterramento TN-S) e carimbo técnico Lucas Aguiar.</p>
+            </div>
+            <div style="display:flex; gap:10px;" class="no-print">
+              <button class="btn btn-secondary" onclick="App.runAutoBalancePhases()">Equilibrar Fases</button>
+              <button class="btn btn-accent" onclick="App.downloadUnifilarSVG()">Baixar Unifilar (.SVG)</button>
+              <button class="btn btn-primary" onclick="window.print()">Imprimir / Exportar PDF</button>
+            </div>
+          </div>
+
+          <div id="boardTechnicalSummary" style="margin-bottom:20px;"></div>
+
+          <div class="data-card">
+            <div class="data-card-header">
+              <span>Balanceamento de Carga entre Fases (R, S, T)</span>
+              <span class="badge badge-green">Distribuição Simétrica</span>
+            </div>
+            <div id="phaseBalanceContainer" class="phase-grid"></div>
+          </div>
+
+          <div class="data-card">
+            <div class="data-card-header">
+              <span>Diagrama Unifilar Automático — Padrão ABNT NBR 5410 / Lucas Aguiar</span>
+              <span class="badge badge-amber">Gerado em Tempo Real</span>
+            </div>
+            <div id="unifilarSvgContainer" class="diagram-canvas-box"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ==================== ABA 6: LISTA DE MATERIAIS & ORÇAMENTO ==================== -->
+      <div id="tabMaterials" class="tab-pane">
+        <div class="panel-scroll-container">
+          <div class="panel-header-bar">
+            <div>
+              <h2>Lista Quantitativa de Materiais e Orçamento Estimado</h2>
+              <p>Levantamento extraído automaticamente das metragens de eletrodutos, condutores por seção/cor, caixas, tomadas, luminárias e proteções do QDC.</p>
+            </div>
+            <div style="display:flex; gap:10px;" class="no-print">
+              <button class="btn btn-success" onclick="App.exportMaterialsCSV()">Exportar Planilha (CSV / Excel)</button>
+              <button class="btn btn-primary" onclick="window.print()">Imprimir Relatório de Materiais</button>
+            </div>
+          </div>
+
+          <div class="data-card">
+            <div class="data-card-header">
+              <span>Relatório Quantitativo de Insumos da Obra</span>
+              <div style="font-size:15px;">
+                Total Estimado do Projeto: <strong id="materialsGrandTotal" class="mono" style="color:var(--brand-primary)">R$ 0,00</strong>
+              </div>
+            </div>
+            <div class="table-responsive">
+              <table class="tech-table">
+                <thead>
+                  <tr>
+                    <th>Código</th>
+                    <th>Grupo de Material</th>
+                    <th>Especificação Técnica</th>
+                    <th>Unid.</th>
+                    <th>Quant.</th>
+                    <th>Preço Unit. (Editável)</th>
+                    <th>Subtotal</th>
+                  </tr>
+                </thead>
+                <tbody id="materialsTableBody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ==================== MODAL ADICIONAR NOVO CÔMODO ==================== -->
+  <div id="addRoomModal" class="modal-backdrop">
+    <div class="modal-dialog" style="max-width:460px;">
+      <div class="modal-header">
+        <h3>Adicionar Novo Cômodo à Planta</h3>
+        <button class="btn btn-secondary btn-sm" onclick="App.closeAddRoomModal()">✕</button>
+      </div>
+      <form id="addRoomModalForm">
+        <div class="modal-body">
+          <div class="form-group">
+            <label>Nome do Cômodo / Ambiente</label>
+            <input type="text" id="arName" class="form-input" placeholder="Ex: Suíte Casal, Cozinha, Escritório" required />
+          </div>
+          <div class="form-group">
+            <label>Classificação Normativa (NBR 5410)</label>
+            <select id="arType" class="form-select">
+              <option value="sala">Sala de Estar / Jantar (1 TUG a cada 5m)</option>
+              <option value="quarto">Dormitório / Suíte (1 TUG a cada 5m)</option>
+              <option value="cozinha">Cozinha / Copa (1 TUG a cada 3,5m • 3x 600VA)</option>
+              <option value="servico">Área de Serviço / Lavanderia (1 TUG a cada 3,5m)</option>
+              <option value="banheiro">Banheiro / Lavabo (Mín. 1 TUG 600VA + Chuveiro)</option>
+              <option value="escritorio">Escritório / Home Office (1 TUG a cada 4m)</option>
+              <option value="corredor">Circulação / Hall / Corredor</option>
+              <option value="garagem">Garagem / Varanda</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Largura (m)</label>
+              <input type="number" step="0.1" min="1.2" max="30" id="arWidth" class="form-input mono" value="3.5" required />
+            </div>
+            <div class="form-group">
+              <label>Comprimento (m)</label>
+              <input type="number" step="0.1" min="1.2" max="30" id="arHeight" class="form-input mono" value="3.2" required />
+            </div>
+          </div>
+          <div class="form-group" style="margin-top:6px;">
+            <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+              <input type="checkbox" id="arAutoNbr" checked />
+              <span>Lançar automaticamente ponto de luz, interruptor, TUGs e eletrodutos (NBR 5410)</span>
+            </label>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" onclick="App.closeAddRoomModal()">Cancelar</button>
+          <button type="submit" class="btn btn-primary">Inserir Cômodo na Planta</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ==================== MODAL NOVO PROJETO ==================== -->
+  <div id="newProjectModal" class="modal-backdrop">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3>Criar Novo Projeto Elétrico — Lucas Aguiar</h3>
+        <button class="btn btn-secondary btn-sm" onclick="App.closeNewProjectModal()">✕</button>
+      </div>
+      <form id="newProjectForm">
+        <div class="modal-body">
+          <div class="form-group">
+            <label>Nome do Empreendimento / Projeto</label>
+            <input type="text" id="npName" class="form-input" placeholder="Ex: Residência Alphaville Lote 14" required />
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Cliente / Contratante</label>
+              <input type="text" id="npClient" class="form-input" placeholder="Nome do cliente" required />
+            </div>
+            <div class="form-group">
+              <label>Categoria</label>
+              <select id="npCategory" class="form-select">
+                <option value="Residencial">Residencial</option>
+                <option value="Comercial">Comercial</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Endereço da Obra</label>
+            <input type="text" id="npAddress" class="form-input" placeholder="Cidade / UF / Logradouro" />
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Concessionária de Energia</label>
+              <select id="npConcessionaria" class="form-select">
+                <option value="Enel">Enel Distribuição</option>
+                <option value="CPFL Energia">CPFL Energia</option>
+                <option value="CEMIG">CEMIG</option>
+                <option value="Neoenergia">Neoenergia / Coelba / Elektro</option>
+                <option value="Copel">Copel</option>
+                <option value="Celesc">Celesc</option>
+                <option value="Equatorial">Equatorial Energia</option>
+                <option value="Light">Light</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Sistema de Fornecimento</label>
+              <select id="npSystem" class="form-select">
+                <option value="Trifásico">Trifásico (3F + N + PE)</option>
+                <option value="Bifásico">Bifásico (2F + N + PE)</option>
+                <option value="Monofásico">Monofásico (F + N + PE)</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Tensão Nominal (Fase / Linha)</label>
+              <select id="npVoltage" class="form-select">
+                <option value="127/220">127V / 220V</option>
+                <option value="220/380">220V / 380V</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Modelo de Planta Inicial</label>
+              <select id="npTemplate" class="form-select">
+                <option value="residencial_padrao">Residência Completa (6 Cômodos + NBR 5410)</option>
+                <option value="comercial_escritorio">Conjunto Comercial (5 Ambientes + NBR 5410)</option>
+                <option value="basico">Planta Inicial Simples (2 Ambientes)</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" onclick="App.closeNewProjectModal()">Cancelar</button>
+          <button type="submit" class="btn btn-primary">Criar e Dimensionar Projeto</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Notificações Toast -->
+  <div id="toastContainer" class="toast-container"></div>
+
+  <!-- Scripts da Aplicação -->
+  <script src="js/nbr5410.js"></script>
+  <script src="js/sample-projects.js"></script>
+  <script src="js/canvas2d.js"></script>
+  <script src="js/viewer3d.js"></script>
+  <script src="js/diagrams.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
+

@@ -330,6 +330,7 @@ window.NBR5410 = (function () {
     project.points = newPoints;
     project.conduits = newConduits;
     project.circuits = circuits;
+    ensureProjectOpenings(project);
     return project;
   }
 
@@ -794,10 +795,123 @@ window.NBR5410 = (function () {
     }));
   }
 
+  // Garante que todo projeto possua portas, janelas e vãos editáveis em seus ambientes
+  function ensureProjectOpenings(project) {
+    if (!project) return;
+    if (Array.isArray(project.openings) && project.openings.length > 0) return;
+    project.openings = [];
+    let doorNum = 1;
+    let winNum = 1;
+
+    (project.rooms || []).forEach((room) => {
+      // 1. Porta padrão na parede sul (ou leste para corredores)
+      if (room.type === 'corredor') {
+        project.openings.push({
+          id: `op-v-${room.id}`,
+          type: 'opening',
+          roomId: room.id,
+          wall: 'w',
+          offset: +(room.h / 2).toFixed(2),
+          width: 1.10,
+          height: 2.10,
+          sillHeight: 0.00,
+          swing: 'in-left',
+          label: `Vão 1,10×2,10`
+        });
+      } else {
+        const doorW = room.type === 'banheiro' ? 0.70 : room.type === 'sala' ? 0.90 : 0.80;
+        project.openings.push({
+          id: `op-d-${room.id}`,
+          type: 'door',
+          roomId: room.id,
+          wall: 's',
+          offset: +(Math.min(0.65, room.w * 0.25)).toFixed(2),
+          width: doorW,
+          height: 2.10,
+          sillHeight: 0.00,
+          swing: 'in-left',
+          label: `P${doorNum++}`
+        });
+      }
+
+      // 2. Janela padrão na parede norte (ou leste para banheiros/serviço)
+      if (room.type !== 'corredor') {
+        const isBath = room.type === 'banheiro';
+        const winW = isBath ? 0.60 : Math.min(1.50, +(room.w * 0.42).toFixed(2));
+        const winH = isBath ? 0.60 : 1.10;
+        const sill = isBath ? 1.60 : 1.00;
+        project.openings.push({
+          id: `op-w-${room.id}`,
+          type: 'window',
+          roomId: room.id,
+          wall: 'n',
+          offset: +(room.w / 2).toFixed(2),
+          width: winW,
+          height: winH,
+          sillHeight: sill,
+          swing: 'in-left',
+          label: `J${winNum++}`
+        });
+      }
+    });
+  }
+
+  // Calcula geometria mundial (x1,y1)-(x2,y2), centro e vetores tangente/normal de uma abertura (porta/janela/vão)
+  function getOpeningWorldGeometry(op, room) {
+    if (!room) return null;
+    const wall = op.wall || 's';
+    const wallLen = (wall === 'n' || wall === 's') ? room.w : room.h;
+    const w = Math.min(Number(op.width || 0.8), Math.max(0.4, wallLen - 0.1));
+    const halfW = w / 2;
+    const clampedOffset = Math.max(halfW + 0.05, Math.min(wallLen - halfW - 0.05, Number(op.offset || wallLen / 2)));
+
+    let cx = room.x;
+    let cy = room.y;
+    let tx = 1, ty = 0; // Vetor tangente ao longo da parede
+    let nx = 0, ny = 1; // Vetor normal apontando para DENTRO do cômodo
+
+    if (wall === 'n') {
+      cx = room.x + clampedOffset;
+      cy = room.y;
+      tx = 1; ty = 0;
+      nx = 0; ny = 1;
+    } else if (wall === 's') {
+      cx = room.x + clampedOffset;
+      cy = room.y + room.h;
+      tx = 1; ty = 0;
+      nx = 0; ny = -1;
+    } else if (wall === 'w') {
+      cx = room.x;
+      cy = room.y + clampedOffset;
+      tx = 0; ty = 1;
+      nx = 1; ny = 0;
+    } else if (wall === 'e') {
+      cx = room.x + room.w;
+      cy = room.y + clampedOffset;
+      tx = 0; ty = 1;
+      nx = -1; ny = 0;
+    }
+
+    const x1 = cx - tx * halfW;
+    const y1 = cy - ty * halfW;
+    const x2 = cx + tx * halfW;
+    const y2 = cy + ty * halfW;
+
+    return {
+      cx, cy, x1, y1, x2, y2,
+      tx, ty, nx, ny,
+      width: w,
+      clampedOffset,
+      wallLen
+    };
+  }
+
   return {
     ROOM_TYPES,
     AMPACITY_TABLE_B1,
     STANDARD_BREAKERS,
+    ensureProjectOpenings,
+    getOpeningWorldGeometry,
     calculateRoomNormativeMinimums,
     inspectRoomCompliance,
     autoGenerateNormativePointsAndCircuits,

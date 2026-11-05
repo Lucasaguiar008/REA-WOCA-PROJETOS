@@ -1,5 +1,5 @@
 // ============================================================================
-// VISUALIZADOR 3D BIM / ESTILO AUTODESK REVIT MEP — FAMÍLIAS REALISTAS 3D
+// VISUALIZADOR 3D BIM / ESTILO AUTODESK REVIT MEP — ARQUITETURA (PORTAS, JANELAS, VÃOS) + ELÉTRICA
 // ============================================================================
 
 window.Viewer3D = (function () {
@@ -32,7 +32,6 @@ window.Viewer3D = (function () {
       const mx = e.clientX - rect.left;
       const my = e.clientY - rect.top;
 
-      // Verifica clique no ViewCube (canto superior direito)
       if (handleViewCubeClick(mx, my)) return;
 
       isDragging = true;
@@ -82,6 +81,9 @@ window.Viewer3D = (function () {
 
   function setProject(proj) {
     project = proj;
+    if (project && window.NBR5410 && window.NBR5410.ensureProjectOpenings) {
+      window.NBR5410.ensureProjectOpenings(project);
+    }
     resize();
     render();
   }
@@ -116,21 +118,16 @@ window.Viewer3D = (function () {
     const cx = canvas.width - 74;
     const cy = 78;
     if (Math.hypot(mx - cx, my - cy) <= 46) {
-      // Alterna entre vistas padrão do Revit (Isométrica, Topo, Frontal, Lateral)
       if (my < cy - 14) {
-        // TOPO
         yaw = 0;
         pitch = 1.42;
       } else if (mx < cx - 12) {
-        // FRONTAL
         yaw = 0;
         pitch = 0.25;
       } else if (mx > cx + 12) {
-        // DIREITA
         yaw = Math.PI / 2;
         pitch = 0.25;
       } else {
-        // ISO
         yaw = 0.68;
         pitch = 0.56;
       }
@@ -202,7 +199,6 @@ window.Viewer3D = (function () {
     return { x: screenX, y: screenY, depth };
   }
 
-  // Determina a orientação da parede onde o componente Revit está hospedado (Wall-Hosted Family)
   function getHostWallBasis(pt) {
     if (!project || !project.rooms || project.rooms.length === 0) {
       return { tx: 1, ty: 0, nx: 0, ny: 1 };
@@ -220,9 +216,7 @@ window.Viewer3D = (function () {
     return { tx: 0, ty: -1, nx: -1, ny: 0 };
   }
 
-  // Desenha um prisma 3D sombreado (usado para caixas 4x2", QDC, espelhos e equipamentos BIM)
   function draw3DBox(center, origin, basis, dims, colors) {
-    // dims: { w: largura tangente, d: profundidade normal, h: altura Z }
     const hw = dims.w / 2;
     const hh = dims.h / 2;
     const d = dims.d;
@@ -236,7 +230,6 @@ window.Viewer3D = (function () {
       );
     }
 
-    // 8 vértices do bloco 3D
     const b0 = toWorld(-hw, 0, -hh);
     const b1 = toWorld(hw, 0, -hh);
     const b2 = toWorld(hw, 0, hh);
@@ -249,13 +242,9 @@ window.Viewer3D = (function () {
 
     const isWire = visualStyle === 'wireframe';
 
-    // Face Superior
     drawQuad([b3, b2, f2, f3], isWire ? 'transparent' : (colors.top || colors.front), colors.stroke);
-    // Face Lateral Esquerda
     drawQuad([b0, f0, f3, b3], isWire ? 'transparent' : (colors.side || colors.front), colors.stroke);
-    // Face Lateral Direita
     drawQuad([f1, b1, b2, f2], isWire ? 'transparent' : (colors.side || colors.front), colors.stroke);
-    // Face Frontal (Voltada para o ambiente)
     drawQuad([f0, f1, f2, f3], isWire ? 'transparent' : colors.front, colors.stroke);
 
     return { toWorld, f0, f1, f2, f3 };
@@ -287,7 +276,6 @@ window.Viewer3D = (function () {
 
     ctx.clearRect(0, 0, w, h);
 
-    // Fundo estilo viewport 3D do Autodesk Revit (gradiente técnico horizonte-céu escuro)
     const bgGrad = ctx.createLinearGradient(0, 0, 0, h);
     bgGrad.addColorStop(0, '#0a101d');
     bgGrad.addColorStop(0.65, '#131d31');
@@ -297,7 +285,7 @@ window.Viewer3D = (function () {
 
     const center = getModelCenter();
 
-    // 1. Eixos de Nível BIM (Nível 1: Piso Acabado 0.00m | Nível 2: Laje Forro 2.80m)
+    // 1. Eixos de Nível BIM
     drawRevitLevelLines(center);
 
     // 2. Laje de Piso e Ambientes 3D
@@ -321,7 +309,7 @@ window.Viewer3D = (function () {
       ctx.fillText(room.name, pc.x, pc.y);
     });
 
-    // 3. Paredes 3D Extrudadas (Semitransparentes para inspeção MEP como na disciplina Elétrica do Revit)
+    // 3. Paredes 3D Extrudadas
     if (wallOpacity > 0.02) {
       project.rooms.forEach(room => {
         const corners = [
@@ -348,12 +336,25 @@ window.Viewer3D = (function () {
       });
     }
 
-    // 4. Eletrodutos 3D Tubulares Estilo Revit MEP (com sombreamento cilíndrico e curvas 90°)
+    // 4. FAMÍLIAS ARQUITETÔNICAS 3D: PORTAS, JANELAS E VÃOS LIVRES (Ordenadas por profundidade)
+    const sortedOpenings = (project.openings || []).map(op => {
+      const room = project.rooms.find(r => r.id === op.roomId);
+      const geom = room ? window.NBR5410.getOpeningWorldGeometry(op, room) : null;
+      const midZ = Number(op.sillHeight || 0) + Number(op.height || 2.1) / 2;
+      const proj = geom ? project3D(geom.cx, geom.cy, midZ, center) : { depth: 0 };
+      return { op, room, geom, proj };
+    }).filter(item => item.geom).sort((a, b) => a.proj.depth - b.proj.depth);
+
+    sortedOpenings.forEach(({ op, geom }) => {
+      drawRevitOpening3D(op, geom, center);
+    });
+
+    // 5. Eletrodutos 3D Tubulares Estilo Revit MEP
     project.conduits.forEach(cd => {
       drawRevitConduit3D(cd, center);
     });
 
-    // 5. Ordena os Pontos Elétricos por profundidade (Painter's Algorithm) e desenha as Famílias 3D do Revit
+    // 6. Famílias Elétricas 3D do Revit (Ordenadas por profundidade)
     const sortedPoints = [...project.points].map(pt => {
       const z = Number(pt.z ?? (pt.category === 'light' ? 2.8 : 0.3));
       const proj = project3D(pt.x, pt.y, z, center);
@@ -364,8 +365,138 @@ window.Viewer3D = (function () {
       drawRevitMEPFamily(pt, z, proj, center);
     });
 
-    // 6. Desenha ViewCube interativo estilo Autodesk Revit no canto superior direito
+    // 7. ViewCube interativo no canto superior direito
     drawRevitViewCube();
+  }
+
+  // ==================== DESENHO 3D DE PORTAS, JANELAS E VÃOS (REVIT ARCHITECTURE) ====================
+  function drawRevitOpening3D(op, geom, center) {
+    const z0 = Number(op.sillHeight || 0.0);
+    const h = Number(op.height || 2.10);
+    const z1 = Math.min(wallHeight - 0.05, z0 + h);
+    const isWire = visualStyle === 'wireframe';
+
+    // Vértices do vão recortado na parede
+    const pBL = project3D(geom.x1, geom.y1, z0, center);
+    const pBR = project3D(geom.x2, geom.y2, z0, center);
+    const pTR = project3D(geom.x2, geom.y2, z1, center);
+    const pTL = project3D(geom.x1, geom.y1, z1, center);
+
+    if (op.type === 'door') {
+      // 1. Vão escuro aberto da porta + Batente/Alizar 3D
+      drawQuad(
+        [pBL, pBR, pTR, pTL],
+        isWire ? 'transparent' : 'rgba(11, 17, 32, 0.72)',
+        '#d97706',
+        2.4
+      );
+
+      // 2. Folha da Porta 3D aberta a 55° (respeitando o lado da dobradiça e sentido in/out!)
+      const swing = op.swing || 'in-left';
+      const hingeAtStart = swing.endsWith('left');
+      const dirSign = swing.startsWith('in') ? 1 : -1;
+      const hx = hingeAtStart ? geom.x1 : geom.x2;
+      const hy = hingeAtStart ? geom.y1 : geom.y2;
+      const tDir = hingeAtStart ? 1 : -1;
+
+      const openAngle = 0.95; // ~55 graus em 3D
+      const cosA = Math.cos(openAngle);
+      const sinA = Math.sin(openAngle);
+      const doorW = geom.width;
+
+      // Extremidade livre da folha da porta aberta no espaço 3D
+      const ex = hx + (geom.tx * tDir * cosA + geom.nx * dirSign * sinA) * doorW;
+      const ey = hy + (geom.ty * tDir * cosA + geom.ny * dirSign * sinA) * doorW;
+
+      const dHingeBot = project3D(hx, hy, z0, center);
+      const dHingeTop = project3D(hx, hy, z1, center);
+      const dFreeTop = project3D(ex, ey, z1, center);
+      const dFreeBot = project3D(ex, ey, z0, center);
+
+      // Arco de abertura 3D no piso (projeção BIM)
+      ctx.save();
+      ctx.setLineDash([3, 3]);
+      ctx.strokeStyle = 'rgba(251, 191, 36, 0.65)';
+      ctx.lineWidth = 1.3;
+      ctx.beginPath();
+      ctx.moveTo(hingeAtStart ? pBR.x : pBL.x, hingeAtStart ? pBR.y : pBL.y);
+      ctx.quadraticCurveTo(
+        (dFreeBot.x + (hingeAtStart ? pBR.x : pBL.x)) / 2,
+        (dFreeBot.y + (hingeAtStart ? pBR.y : pBL.y)) / 2,
+        dFreeBot.x,
+        dFreeBot.y
+      );
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+
+      // Folha 3D em madeira/verniz
+      drawQuad(
+        [dHingeBot, dFreeBot, dFreeTop, dHingeTop],
+        isWire ? 'transparent' : 'rgba(180, 83, 9, 0.86)',
+        '#fde68a',
+        1.8
+      );
+
+      // Maçaneta cromada 3D a z = 1.00m perto da extremidade livre
+      const handleX = hx + (ex - hx) * 0.86;
+      const handleY = hy + (ey - hy) * 0.86;
+      const pHandle = project3D(handleX, handleY, 1.00, center);
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(pHandle.x, pHandle.y, 3.2, 0, Math.PI * 2);
+      ctx.fillStyle = '#f8fafc';
+      ctx.fill();
+      ctx.strokeStyle = '#0f172a';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.restore();
+    } else if (op.type === 'window') {
+      // FAMÍLIA REVIT 3D: JANELA DE CORRER EM ALUMÍNIO E VIDRO TEMPERADO
+      drawQuad(
+        [pBL, pBR, pTR, pTL],
+        isWire ? 'transparent' : 'rgba(56, 189, 248, 0.30)',
+        '#e2e8f0',
+        2.4
+      );
+
+      // Divisória central vertical (2 folhas de correr) e travessa
+      const pMidB = project3D(geom.cx, geom.cy, z0, center);
+      const pMidT = project3D(geom.cx, geom.cy, z1, center);
+      ctx.save();
+      ctx.strokeStyle = '#e2e8f0';
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      ctx.moveTo(pMidB.x, pMidB.y);
+      ctx.lineTo(pMidT.x, pMidT.y);
+      ctx.stroke();
+
+      // Peitoril saliente em granito/concreto na base da janela
+      ctx.strokeStyle = '#38bdf8';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(pBL.x, pBL.y);
+      ctx.lineTo(pBR.x, pBR.y);
+      ctx.stroke();
+      ctx.restore();
+    } else if (op.type === 'opening') {
+      // FAMÍLIA REVIT 3D: VÃO LIVRE / PASSAGEM ARQUITETÔNICA
+      drawQuad(
+        [pBL, pBR, pTR, pTL],
+        isWire ? 'transparent' : 'rgba(15, 23, 42, 0.55)',
+        '#c084fc',
+        2.0
+      );
+    }
+
+    // Etiqueta 3D discreta na verga da porta/janela/vão
+    const pTopMid = project3D(geom.cx, geom.cy, z1 + 0.12, center);
+    ctx.save();
+    ctx.fillStyle = op.type === 'window' ? '#7dd3fc' : op.type === 'opening' ? '#d8b4fe' : '#fde68a';
+    ctx.font = '700 9.5px JetBrains Mono, monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(`${op.label || op.type.toUpperCase()} (${geom.width.toFixed(2)}×${h.toFixed(2)}m)`, pTopMid.x, pTopMid.y);
+    ctx.restore();
   }
 
   function drawRevitLevelLines(center) {
@@ -395,7 +526,6 @@ window.Viewer3D = (function () {
       ctx.stroke();
       ctx.setLineDash([]);
 
-      // Símbolo de Nível do Revit (círculo bipartido azul/branco)
       ctx.beginPath();
       ctx.arc(pEnd.x + 8, pEnd.y, 6, 0, Math.PI * 2);
       ctx.strokeStyle = '#38bdf8';
@@ -413,7 +543,6 @@ window.Viewer3D = (function () {
     });
   }
 
-  // Desenha Eletroduto 3D com aparência de tubo cilíndrico + curvas de 90° (Revit Conduit with Fittings)
   function drawRevitConduit3D(cd, center) {
     const pt1 = project.points.find(p => p.id === cd.fromId);
     const pt2 = project.points.find(p => p.id === cd.toId);
@@ -436,7 +565,6 @@ window.Viewer3D = (function () {
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
 
-    // Camada base sombreada do tubo
     ctx.strokeStyle = outerColor;
     ctx.lineWidth = thickness;
     ctx.beginPath();
@@ -446,7 +574,6 @@ window.Viewer3D = (function () {
     ctx.lineTo(b.x, b.y);
     ctx.stroke();
 
-    // Brilho especular central (efeito cilindro 3D realista)
     if (visualStyle !== 'wireframe') {
       ctx.strokeStyle = highlightColor;
       ctx.lineWidth = thickness * 0.35;
@@ -458,7 +585,6 @@ window.Viewer3D = (function () {
       ctx.stroke();
     }
 
-    // Luvas / Conexões de curva (Conduit Fittings no Revit)
     [aTop, bTop].forEach(joint => {
       ctx.beginPath();
       ctx.arc(joint.x, joint.y, thickness * 0.72, 0, Math.PI * 2);
@@ -472,13 +598,11 @@ window.Viewer3D = (function () {
     ctx.restore();
   }
 
-  // ==================== FAMÍLIAS 3D REALISTAS ESTILO AUTODESK REVIT MEP ====================
   function drawRevitMEPFamily(pt, z, pos3d, center) {
     const floor3d = project3D(pt.x, pt.y, 0, center);
     const basis = getHostWallBasis(pt);
     const isHovered = hoveredPoint && hoveredPoint.id === pt.id;
 
-    // Linha de cota vertical (elevação do piso até a caixa 4x2")
     ctx.save();
     ctx.strokeStyle = isHovered ? '#f59e0b' : 'rgba(148, 163, 184, 0.25)';
     ctx.setLineDash([2, 3]);
@@ -499,7 +623,6 @@ window.Viewer3D = (function () {
       drawRevitOutlet4x2Family3D(pt, z, basis, center, pos3d);
     }
 
-    // Etiqueta técnica BIM flutuante
     ctx.save();
     const tagY = pos3d.y - (pt.category === 'qdc' ? 28 : 20);
     const text = `${pt.circuitId || pt.label} • h=${z.toFixed(2)}m`;
@@ -520,9 +643,7 @@ window.Viewer3D = (function () {
     ctx.restore();
   }
 
-  // 1. FAMÍLIA REVIT 3D: Quadro de Distribuição de Embutir (Com Barramentos e Disjuntores DIN)
   function drawRevitQDCBoard3D(pt, z, basis, center, pos3d) {
-    // Caixa metálica de embutir na parede
     draw3DBox(
       center,
       { x: pt.x, y: pt.y, z },
@@ -531,7 +652,6 @@ window.Viewer3D = (function () {
       { top: '#94a3b8', side: '#64748b', front: '#cbd5e1', stroke: '#1e293b' }
     );
 
-    // Interior escuro com trilhos DIN e Disjuntores
     const inner = draw3DBox(
       center,
       {
@@ -544,12 +664,10 @@ window.Viewer3D = (function () {
       { top: '#0f172a', side: '#0f172a', front: '#0f172a', stroke: '#f59e0b' }
     );
 
-    // Barramento de Cobre e Fileiras de Disjuntores DIN no interior do QDC
     ctx.save();
     for (const rowZ of [0.10, -0.06]) {
       const pL = inner.toWorld(-0.15, 0.015, rowZ);
       const pR = inner.toWorld(0.15, 0.015, rowZ);
-      // Trilho DIN / módulos de disjuntores
       ctx.strokeStyle = '#334155';
       ctx.lineWidth = 6;
       ctx.beginPath();
@@ -557,7 +675,6 @@ window.Viewer3D = (function () {
       ctx.lineTo(pR.x, pR.y);
       ctx.stroke();
 
-      // Alavancas de Disjuntores (Geral Laranja, IDR Azul, Terminais Pretos/Brancos)
       ctx.strokeStyle = rowZ > 0 ? '#f59e0b' : '#38bdf8';
       ctx.lineWidth = 2.5;
       ctx.setLineDash([3, 3]);
@@ -568,7 +685,6 @@ window.Viewer3D = (function () {
       ctx.setLineDash([]);
     }
 
-    // Adesivo de Advertência NBR 5410 (Raio Amarelo na Porta do QDC)
     ctx.beginPath();
     ctx.moveTo(pos3d.x, pos3d.y - 6);
     ctx.lineTo(pos3d.x + 5, pos3d.y + 4);
@@ -582,9 +698,7 @@ window.Viewer3D = (function () {
     ctx.restore();
   }
 
-  // 2. FAMÍLIA REVIT 3D: Luminária Plafon LED + Caixa Octogonal 4x4" na Laje
   function drawRevitCeilingFixture3D(pt, z, center, pos3d, floor3d) {
-    // Feixe volumétrico de iluminação
     if (showLightCones && visualStyle !== 'wireframe') {
       const coneGrad = ctx.createRadialGradient(pos3d.x, pos3d.y, 3, floor3d.x, floor3d.y, 48);
       coneGrad.addColorStop(0, 'rgba(253, 224, 71, 0.42)');
@@ -601,7 +715,6 @@ window.Viewer3D = (function () {
       ctx.restore();
     }
 
-    // Caixa Octogonal 4x4" Amarela no topo da laje
     const octTop = project3D(pt.x, pt.y, z + 0.07, center);
     ctx.save();
     ctx.beginPath();
@@ -612,11 +725,9 @@ window.Viewer3D = (function () {
     ctx.lineWidth = 1.2;
     ctx.stroke();
 
-    // Corpo Cilíndrico 3D do Plafon LED de Sobrepor (Alumínio Branco + Difusor Acrílico)
     const rx = Math.max(11, zoom * 0.24);
     const ry = Math.max(6.5, zoom * 0.14);
 
-    // Lateral do Plafon
     ctx.beginPath();
     ctx.ellipse(pos3d.x, pos3d.y - 4, rx, ry, 0, 0, Math.PI * 2);
     ctx.fillStyle = '#cbd5e1';
@@ -625,7 +736,6 @@ window.Viewer3D = (function () {
     ctx.lineWidth = 1.2;
     ctx.stroke();
 
-    // Face Inferior Acrílica Iluminada do Plafon LED
     ctx.beginPath();
     ctx.ellipse(pos3d.x, pos3d.y, rx, ry, 0, 0, Math.PI * 2);
     ctx.fillStyle = '#f8fafc';
@@ -644,11 +754,9 @@ window.Viewer3D = (function () {
     ctx.restore();
   }
 
-  // 3. FAMÍLIA REVIT 3D: Conjunto Tomada 4x2" 2P+T (NBR 14136 — 3 Furos Alinhados + Caixa Amarela)
   function drawRevitOutlet4x2Family3D(pt, z, basis, center, pos3d) {
     const is20A = pt.category === 'tue' || Number(pt.powerVA) >= 600;
 
-    // Caixa de Passagem 4x2" Amarela embutida na parede (visível em perspectiva igual ao Revit MEP)
     draw3DBox(
       center,
       {
@@ -661,7 +769,6 @@ window.Viewer3D = (function () {
       { top: '#facc15', side: '#ca8a04', front: '#eab308', stroke: '#854d0e' }
     );
 
-    // Espelho / Placa 4x2" Branca Chanfrada 3D
     draw3DBox(
       center,
       { x: pt.x, y: pt.y, z },
@@ -670,11 +777,9 @@ window.Viewer3D = (function () {
       { top: '#ffffff', side: '#cbd5e1', front: '#f8fafc', stroke: '#475569' }
     );
 
-    // Detalhe frontal do Módulo NBR 14136 (Poço Hexagonal + 3 Furos: Fase, Terra central e Neutro)
     ctx.save();
     ctx.translate(pos3d.x, pos3d.y);
 
-    // Moldura do módulo central (Vermelho para Tomadas 20A / TUE, Branco Gelo para 10A)
     const modW = 14;
     const modH = 9;
     ctx.beginPath();
@@ -691,10 +796,8 @@ window.Viewer3D = (function () {
     ctx.lineWidth = 1.2;
     ctx.stroke();
 
-    // Os 3 furos (alvéolos) da tomada padrão brasileiro NBR 14136
     const holeColor = is20A ? '#ffffff' : '#0f172a';
     const holeRadius = is20A ? 1.55 : 1.3;
-    // Furo Fase (esquerda), Furo Terra (centro deslocado), Furo Neutro (direita)
     [
       { x: -4.2, y: 0.6 },
       { x: 0, y: -1.4 },
@@ -709,9 +812,7 @@ window.Viewer3D = (function () {
     ctx.restore();
   }
 
-  // 4. FAMÍLIA REVIT 3D: Conjunto Interruptor 4x2" (Caixa 4x2" + Espelho + Tecla Basculante)
   function drawRevitSwitch4x2Family3D(pt, z, basis, center, pos3d) {
-    // Caixa 4x2" Amarela de parede
     draw3DBox(
       center,
       {
@@ -724,7 +825,6 @@ window.Viewer3D = (function () {
       { top: '#facc15', side: '#ca8a04', front: '#eab308', stroke: '#854d0e' }
     );
 
-    // Espelho 4x2" Branco 3D
     draw3DBox(
       center,
       { x: pt.x, y: pt.y, z },
@@ -733,7 +833,6 @@ window.Viewer3D = (function () {
       { top: '#ffffff', side: '#cbd5e1', front: '#f8fafc', stroke: '#475569' }
     );
 
-    // Tecla basculante central com relevo + LED verde localizador
     ctx.save();
     ctx.translate(pos3d.x, pos3d.y);
     ctx.fillStyle = '#e2e8f0';
@@ -742,7 +841,6 @@ window.Viewer3D = (function () {
     ctx.fillRect(-6, -4.5, 12, 9);
     ctx.strokeRect(-6, -4.5, 12, 9);
 
-    // Linha divisória de balanço da tecla + LED verde
     ctx.strokeStyle = '#10b981';
     ctx.lineWidth = 1.8;
     ctx.beginPath();
@@ -752,13 +850,11 @@ window.Viewer3D = (function () {
     ctx.restore();
   }
 
-  // ViewCube interativo no canto superior direito (estilo Autodesk Revit)
   function drawRevitViewCube() {
     const cx = canvas.width - 74;
     const cy = 78;
 
     ctx.save();
-    // Anel da bússola (N, S, L, O)
     ctx.beginPath();
     ctx.arc(cx, cy + 8, 42, 0, Math.PI * 2);
     ctx.fillStyle = 'rgba(15, 23, 42, 0.75)';
@@ -775,8 +871,6 @@ window.Viewer3D = (function () {
     ctx.fillText('O', cx - 48, cy + 11);
     ctx.fillText('L', cx + 48, cy + 11);
 
-    // Cubo isométrico do ViewCube
-    // Face Topo
     ctx.beginPath();
     ctx.moveTo(cx, cy - 26);
     ctx.lineTo(cx + 26, cy - 13);
@@ -789,7 +883,6 @@ window.Viewer3D = (function () {
     ctx.lineWidth = 1.2;
     ctx.stroke();
 
-    // Face Esquerda (Frontal)
     ctx.beginPath();
     ctx.moveTo(cx - 26, cy - 13);
     ctx.lineTo(cx, cy);
@@ -800,7 +893,6 @@ window.Viewer3D = (function () {
     ctx.fill();
     ctx.stroke();
 
-    // Face Direita
     ctx.beginPath();
     ctx.moveTo(cx, cy);
     ctx.lineTo(cx + 26, cy - 13);

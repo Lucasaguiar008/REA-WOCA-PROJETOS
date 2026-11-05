@@ -1,5 +1,5 @@
 // ============================================================================
-// EDITOR CAD 2D INTERATIVO — PLANTA BAIXA EDITÁVEL + HISTÓRICO UNDO/REDO + COPY/PASTE
+// EDITOR CAD 2D INTERATIVO — PLANTA BAIXA, PORTAS/JANELAS/VÃOS (NBR 6492) E ELÉTRICA (NBR 5410)
 // ============================================================================
 
 window.CAD2D = (function () {
@@ -9,7 +9,7 @@ window.CAD2D = (function () {
   let onSelectionChange = null;
   let onProjectMutate = null;
   let onToolChange = null;
-  let onStateChange = null; // notifica botões de Undo/Redo/Copy/Paste
+  let onStateChange = null;
 
   // Transformação de câmera (metros -> pixels)
   let scale = 68;
@@ -17,11 +17,13 @@ window.CAD2D = (function () {
   let offsetY = 75;
 
   // Estado de ferramentas
-  let activeTool = 'select'; // select, pan, add_room, qdc, light, switch, tug_baixa, tug_media, tue_alta, conduit
-  let selectedItem = null;   // { kind: 'room'|'point'|'conduit', id: string }
+  // select, pan, add_room, door, window, opening, qdc, light, switch, tug_baixa, tug_media, tue_alta, conduit
+  let activeTool = 'select';
+  let selectedItem = null;   // { kind: 'room'|'point'|'conduit'|'opening', id: string }
   let hoveredPointId = null;
+  let hoveredOpeningId = null;
   let hoveredRoomId = null;
-  let hoveredHandle = null;  // 'n','s','e','w','nw','ne','sw','se'
+  let hoveredHandle = null;  // 'n','s','e','w','nw','ne','sw','se' | 'op_start','op_end'
   let conduitStartPointId = null;
   let mouseWorldPos = { x: 0, y: 0 };
 
@@ -29,12 +31,12 @@ window.CAD2D = (function () {
   const MAX_HISTORY = 60;
   let undoStack = [];
   let redoStack = [];
-  let clipboardData = null; // { kind: 'room'|'point', payload: {...}, pasteCount: 0 }
+  let clipboardData = null;
   let pendingDragSnapshot = null;
 
   // Arraste e Edição
   let isDragging = false;
-  let dragType = null; // 'pan' | 'point' | 'room' | 'resize_room' | 'new_room'
+  let dragType = null; // 'pan' | 'point' | 'room' | 'resize_room' | 'new_room' | 'opening' | 'resize_opening'
   let activeResizeHandle = null;
   let dragStartScreen = { x: 0, y: 0 };
   let dragStartWorld = { x: 0, y: 0 };
@@ -71,6 +73,9 @@ window.CAD2D = (function () {
 
   function setProject(proj) {
     project = proj;
+    if (project) {
+      window.NBR5410.ensureProjectOpenings(project);
+    }
     selectedItem = null;
     conduitStartPointId = null;
     undoStack = [];
@@ -86,10 +91,11 @@ window.CAD2D = (function () {
   function captureStateSnapshot() {
     if (!project) return null;
     return JSON.stringify({
-      rooms: project.rooms,
-      points: project.points,
-      conduits: project.conduits,
-      circuits: project.circuits,
+      rooms: project.rooms || [],
+      openings: project.openings || [],
+      points: project.points || [],
+      conduits: project.conduits || [],
+      circuits: project.circuits || [],
       selectedItem
     });
   }
@@ -98,6 +104,7 @@ window.CAD2D = (function () {
     if (!project || !serialized) return;
     const data = JSON.parse(serialized);
     project.rooms = data.rooms || [];
+    project.openings = data.openings || [];
     project.points = data.points || [];
     project.conduits = data.conduits || [];
     project.circuits = data.circuits || [];
@@ -149,7 +156,7 @@ window.CAD2D = (function () {
     return true;
   }
 
-  // ==================== COPIAR E COLAR (OBJETOS E AMBIENTES) ====================
+  // ==================== COPIAR E COLAR (AMBIENTES, PONTOS E PORTAS/JANELAS/VÃOS) ====================
   function copySelected() {
     if (!project || !selectedItem) return false;
 
@@ -157,17 +164,18 @@ window.CAD2D = (function () {
       const room = project.rooms.find(r => r.id === selectedItem.id);
       if (!room) return false;
 
-      // Copia o cômodo e todos os pontos e eletrodutos internos associados a ele
       const roomPoints = project.points.filter(p => isPointInsideRoom(p, room) && p.category !== 'qdc');
       const roomPtIds = new Set(roomPoints.map(p => p.id));
       const roomConduits = project.conduits.filter(
         c => roomPtIds.has(c.fromId) && roomPtIds.has(c.toId)
       );
+      const roomOpenings = (project.openings || []).filter(op => op.roomId === room.id);
 
       clipboardData = {
         kind: 'room',
         pasteCount: 0,
         room: JSON.parse(JSON.stringify(room)),
+        openings: JSON.parse(JSON.stringify(roomOpenings)),
         points: JSON.parse(JSON.stringify(roomPoints)),
         conduits: JSON.parse(JSON.stringify(roomConduits))
       };
@@ -190,6 +198,20 @@ window.CAD2D = (function () {
       return true;
     }
 
+    if (selectedItem.kind === 'opening') {
+      const op = (project.openings || []).find(o => o.id === selectedItem.id);
+      if (!op) return false;
+
+      clipboardData = {
+        kind: 'opening',
+        pasteCount: 0,
+        opening: JSON.parse(JSON.stringify(op))
+      };
+      notifyStateChange();
+      onProjectMutate(`Abertura "${op.label || op.type}" copiada (Ctrl+C)`);
+      return true;
+    }
+
     return false;
   }
 
@@ -202,7 +224,6 @@ window.CAD2D = (function () {
 
     if (clipboardData.kind === 'room') {
       const srcRoom = clipboardData.room;
-      // Posiciona ao lado ou deslocado de forma limpa
       const dx = +(srcRoom.w * stepCount).toFixed(2);
       const dy = 0;
 
@@ -215,7 +236,16 @@ window.CAD2D = (function () {
       };
       project.rooms.push(newRoom);
 
-      // Mapeia IDs antigos dos pontos para os novos IDs colados
+      // Cola aberturas (portas, janelas, vãos) do cômodo
+      if (!Array.isArray(project.openings)) project.openings = [];
+      (clipboardData.openings || []).forEach((op, idx) => {
+        project.openings.push({
+          ...JSON.parse(JSON.stringify(op)),
+          id: `op-paste-${stamp}-${idx}`,
+          roomId: newRoom.id
+        });
+      });
+
       const idMap = {};
       const qdc = project.points.find(p => p.category === 'qdc');
       let pastedLightId = null;
@@ -234,7 +264,6 @@ window.CAD2D = (function () {
         });
       });
 
-      // Cola eletrodutos internos do cômodo
       (clipboardData.conduits || []).forEach((cd, idx) => {
         if (idMap[cd.fromId] && idMap[cd.toId]) {
           project.conduits.push({
@@ -246,7 +275,6 @@ window.CAD2D = (function () {
         }
       });
 
-      // Conecta o ponto de luz do novo cômodo ao QDC se houver
       if (qdc && pastedLightId) {
         project.conduits.push({
           id: `cd-qdc-${stamp}`,
@@ -289,6 +317,23 @@ window.CAD2D = (function () {
       return true;
     }
 
+    if (clipboardData.kind === 'opening') {
+      const srcOp = clipboardData.opening;
+      if (!Array.isArray(project.openings)) project.openings = [];
+      const newOp = {
+        ...JSON.parse(JSON.stringify(srcOp)),
+        id: `op-paste-${stamp}`,
+        offset: +(Number(srcOp.offset || 1.0) + 0.6 * stepCount).toFixed(2)
+      };
+      project.openings.push(newOp);
+      selectedItem = { kind: 'opening', id: newOp.id };
+      onSelectionChange(selectedItem);
+      notifyStateChange();
+      onProjectMutate(`Abertura "${newOp.label || newOp.type}" colada (Ctrl+V)`);
+      render();
+      return true;
+    }
+
     return false;
   }
 
@@ -304,7 +349,7 @@ window.CAD2D = (function () {
       onStateChange({
         canUndo: undoStack.length > 0,
         canRedo: redoStack.length > 0,
-        canCopy: Boolean(selectedItem && (selectedItem.kind === 'room' || selectedItem.kind === 'point')),
+        canCopy: Boolean(selectedItem && ['room', 'point', 'opening'].includes(selectedItem.kind)),
         canPaste: Boolean(clipboardData),
         hasSelection: Boolean(selectedItem)
       });
@@ -338,9 +383,7 @@ window.CAD2D = (function () {
     if (!canvas) return;
     if (activeTool === 'pan') {
       canvas.style.cursor = 'grab';
-    } else if (activeTool === 'add_room') {
-      canvas.style.cursor = 'crosshair';
-    } else if (['qdc', 'light', 'switch', 'tug_baixa', 'tug_media', 'tue_alta', 'conduit'].includes(activeTool)) {
+    } else if (['add_room', 'door', 'window', 'opening', 'qdc', 'light', 'switch', 'tug_baixa', 'tug_media', 'tue_alta', 'conduit'].includes(activeTool)) {
       canvas.style.cursor = 'crosshair';
     } else if (hoveredHandle) {
       const cursorMap = {
@@ -351,10 +394,12 @@ window.CAD2D = (function () {
         nw: 'nwse-resize',
         se: 'nwse-resize',
         ne: 'nesw-resize',
-        sw: 'nesw-resize'
+        sw: 'nesw-resize',
+        op_start: 'ew-resize',
+        op_end: 'ew-resize'
       };
       canvas.style.cursor = cursorMap[hoveredHandle] || 'pointer';
-    } else if (hoveredPointId) {
+    } else if (hoveredPointId || hoveredOpeningId) {
       canvas.style.cursor = 'move';
     } else if (hoveredRoomId) {
       canvas.style.cursor = 'pointer';
@@ -454,6 +499,105 @@ window.CAD2D = (function () {
     return +(Math.round(val / step) * step).toFixed(2);
   }
 
+  // ==================== GEOMETRIA E SNAP DE PORTAS, JANELAS E VÃOS NAS PAREDES ====================
+  // Encontra a parede mais próxima de (wx, wy) em qualquer cômodo do projeto
+  function findNearestWallSnap(wx, wy) {
+    if (!project || !project.rooms || project.rooms.length === 0) return null;
+    let best = null;
+
+    project.rooms.forEach(room => {
+      const candidates = [
+        // Norte (y = room.y)
+        {
+          wall: 'n',
+          dist: Math.abs(wy - room.y) + (wx < room.x ? room.x - wx : wx > room.x + room.w ? wx - (room.x + room.w) : 0),
+          offset: Math.max(0.4, Math.min(room.w - 0.4, +(wx - room.x).toFixed(2))),
+          wallLen: room.w
+        },
+        // Sul (y = room.y + room.h)
+        {
+          wall: 's',
+          dist: Math.abs(wy - (room.y + room.h)) + (wx < room.x ? room.x - wx : wx > room.x + room.w ? wx - (room.x + room.w) : 0),
+          offset: Math.max(0.4, Math.min(room.w - 0.4, +(wx - room.x).toFixed(2))),
+          wallLen: room.w
+        },
+        // Oeste (x = room.x)
+        {
+          wall: 'w',
+          dist: Math.abs(wx - room.x) + (wy < room.y ? room.y - wy : wy > room.y + room.h ? wy - (room.y + room.h) : 0),
+          offset: Math.max(0.4, Math.min(room.h - 0.4, +(wy - room.y).toFixed(2))),
+          wallLen: room.h
+        },
+        // Leste (x = room.x + room.w)
+        {
+          wall: 'e',
+          dist: Math.abs(wx - (room.x + room.w)) + (wy < room.y ? room.y - wy : wy > room.y + room.h ? wy - (room.y + room.h) : 0),
+          offset: Math.max(0.4, Math.min(room.h - 0.4, +(wy - room.y).toFixed(2))),
+          wallLen: room.h
+        }
+      ];
+
+      candidates.forEach(c => {
+        if (!best || c.dist < best.dist) {
+          best = {
+            roomId: room.id,
+            room,
+            wall: c.wall,
+            offset: snap(c.offset, 0.1),
+            dist: c.dist,
+            wallLen: c.wallLen
+          };
+        }
+      });
+    });
+
+    return best;
+  }
+
+  function findOpeningAtScreen(sx, sy) {
+    if (!project || !Array.isArray(project.openings)) return null;
+    for (let i = project.openings.length - 1; i >= 0; i--) {
+      const op = project.openings[i];
+      const room = project.rooms.find(r => r.id === op.roomId);
+      if (!room) continue;
+      const geom = window.NBR5410.getOpeningWorldGeometry(op, room);
+      if (!geom) continue;
+
+      const s1 = worldToScreen(geom.x1, geom.y1);
+      const s2 = worldToScreen(geom.x2, geom.y2);
+      const sc = worldToScreen(geom.cx, geom.cy);
+
+      // Distância do ponto de clique ao segmento da abertura ou ao centro do arco da porta
+      const distSeg = distToSegment({ x: sx, y: sy }, s1, s2);
+      if (distSeg <= 14 || Math.hypot(sx - sc.x, sy - sc.y) <= 18) {
+        return op;
+      }
+    }
+    return null;
+  }
+
+  function distToSegment(p, v, w) {
+    const l2 = (v.x - w.x) ** 2 + (v.y - w.y) ** 2;
+    if (l2 === 0) return Math.hypot(p.x - v.x, p.y - v.y);
+    let t = ((p.x - v.x) * (w.x - v.x) + (p.y - v.y) * (w.y - v.y)) / l2;
+    t = Math.max(0, Math.min(1, t));
+    return Math.hypot(p.x - (v.x + t * (w.x - v.x)), p.y - (v.y + t * (w.y - v.y)));
+  }
+
+  function getOpeningResizeHandles(op) {
+    if (!project) return [];
+    const room = project.rooms.find(r => r.id === op.roomId);
+    if (!room) return [];
+    const geom = window.NBR5410.getOpeningWorldGeometry(op, room);
+    if (!geom) return [];
+    const s1 = worldToScreen(geom.x1, geom.y1);
+    const s2 = worldToScreen(geom.x2, geom.y2);
+    return [
+      { id: 'op_start', x: s1.x, y: s1.y },
+      { id: 'op_end', x: s2.x, y: s2.y }
+    ];
+  }
+
   function getRoomResizeHandles(room) {
     const tl = worldToScreen(room.x, room.y);
     const br = worldToScreen(room.x + room.w, room.y + room.h);
@@ -473,13 +617,24 @@ window.CAD2D = (function () {
   }
 
   function findResizeHandleAtScreen(sx, sy) {
-    if (!project || !selectedItem || selectedItem.kind !== 'room') return null;
-    const room = project.rooms.find(r => r.id === selectedItem.id);
-    if (!room) return null;
-    const handles = getRoomResizeHandles(room);
-    for (const h of handles) {
-      if (Math.hypot(sx - h.x, sy - h.y) <= 11) {
-        return h.id;
+    if (!project || !selectedItem) return null;
+    if (selectedItem.kind === 'room') {
+      const room = project.rooms.find(r => r.id === selectedItem.id);
+      if (!room) return null;
+      const handles = getRoomResizeHandles(room);
+      for (const h of handles) {
+        if (Math.hypot(sx - h.x, sy - h.y) <= 11) {
+          return h.id;
+        }
+      }
+    } else if (selectedItem.kind === 'opening') {
+      const op = (project.openings || []).find(o => o.id === selectedItem.id);
+      if (!op) return null;
+      const handles = getOpeningResizeHandles(op);
+      for (const h of handles) {
+        if (Math.hypot(sx - h.x, sy - h.y) <= 11) {
+          return h.id;
+        }
       }
     }
     return null;
@@ -511,7 +666,6 @@ window.CAD2D = (function () {
     canvas.addEventListener('dblclick', onDoubleClick);
     canvas.addEventListener('wheel', onWheel, { passive: false });
 
-    // Atalhos de Teclado Globais (Ctrl+Z, Ctrl+Y, Ctrl+Shift+Z, Ctrl+C, Ctrl+V, Ctrl+D, Delete, R, Esc)
     window.addEventListener('keydown', (e) => {
       if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA')) {
         return;
@@ -554,8 +708,12 @@ window.CAD2D = (function () {
         newRoomPreview = null;
         isDragging = false;
         setTool('select');
-      } else if ((e.key === 'r' || e.key === 'R') && !isCtrlOrCmd && selectedItem && selectedItem.kind === 'point') {
-        rotateSelectedPoint();
+      } else if ((e.key === 'r' || e.key === 'R') && !isCtrlOrCmd && selectedItem) {
+        if (selectedItem.kind === 'point') {
+          rotateSelectedPoint();
+        } else if (selectedItem.kind === 'opening') {
+          flipSelectedOpeningSwing();
+        }
       }
     });
   }
@@ -568,6 +726,20 @@ window.CAD2D = (function () {
     const currentAngle = getWallNormalAngle(pt);
     pt.rotation = +((currentAngle + Math.PI / 2) % (Math.PI * 2)).toFixed(4);
     onProjectMutate('Simbologia rotacionada em 90°');
+    render();
+  }
+
+  // Alterna o sentido de abertura da porta selecionada (Interna Esquerda -> Interna Direita -> Externa Esquerda -> Externa Direita)
+  function flipSelectedOpeningSwing() {
+    if (!project || !selectedItem || selectedItem.kind !== 'opening') return;
+    const op = (project.openings || []).find(o => o.id === selectedItem.id);
+    if (!op) return;
+    pushHistorySnapshot();
+    const order = ['in-left', 'in-right', 'out-left', 'out-right'];
+    const idx = order.indexOf(op.swing || 'in-left');
+    op.swing = order[(idx + 1) % order.length];
+    onSelectionChange(selectedItem);
+    onProjectMutate('Sentido de abertura da porta invertido (Tecla R)');
     render();
   }
 
@@ -585,6 +757,18 @@ window.CAD2D = (function () {
       notifyStateChange();
       const labelInput = document.getElementById('inspectorPointLabel');
       if (labelInput) labelInput.focus();
+      render();
+      return;
+    }
+
+    const hitOp = findOpeningAtScreen(sx, sy);
+    if (hitOp) {
+      selectedItem = { kind: 'opening', id: hitOp.id };
+      onSelectionChange(selectedItem);
+      notifyStateChange();
+      if (hitOp.type === 'door') {
+        flipSelectedOpeningSwing();
+      }
       render();
       return;
     }
@@ -654,7 +838,13 @@ window.CAD2D = (function () {
       return;
     }
 
-    // 3. Traçar Eletroduto
+    // 3. Inserir Porta, Janela ou Vão Livre na parede mais próxima
+    if (['door', 'window', 'opening'].includes(activeTool)) {
+      placeNewOpeningAt(world.x, world.y, activeTool);
+      return;
+    }
+
+    // 4. Traçar Eletroduto
     if (activeTool === 'conduit') {
       const hitPt = findPointAtScreen(sx, sy);
       if (hitPt) {
@@ -677,28 +867,40 @@ window.CAD2D = (function () {
       return;
     }
 
-    // 4. Lançar Ponto Elétrico
+    // 5. Lançar Ponto Elétrico
     if (['qdc', 'light', 'switch', 'tug_baixa', 'tug_media', 'tue_alta'].includes(activeTool)) {
       placeNewPointAt(world.x, world.y, activeTool);
       return;
     }
 
-    // 5. Alça de Redimensionamento de Cômodo
+    // 6. Alça de Redimensionamento (Cômodo ou Abertura)
     const handle = findResizeHandleAtScreen(sx, sy);
-    if (handle && selectedItem && selectedItem.kind === 'room') {
-      const room = project.rooms.find(r => r.id === selectedItem.id);
-      if (room) {
-        pendingDragSnapshot = captureStateSnapshot();
-        isDragging = true;
-        dragType = 'resize_room';
-        activeResizeHandle = handle;
-        dragInitialRoom = { x: room.x, y: room.y, w: room.w, h: room.h };
-        snapshotRoomPoints(room);
-        return;
+    if (handle && selectedItem) {
+      if (selectedItem.kind === 'room') {
+        const room = project.rooms.find(r => r.id === selectedItem.id);
+        if (room) {
+          pendingDragSnapshot = captureStateSnapshot();
+          isDragging = true;
+          dragType = 'resize_room';
+          activeResizeHandle = handle;
+          dragInitialRoom = { x: room.x, y: room.y, w: room.w, h: room.h };
+          snapshotRoomPoints(room);
+          return;
+        }
+      } else if (selectedItem.kind === 'opening') {
+        const op = (project.openings || []).find(o => o.id === selectedItem.id);
+        if (op) {
+          pendingDragSnapshot = captureStateSnapshot();
+          isDragging = true;
+          dragType = 'resize_opening';
+          activeResizeHandle = handle;
+          dragInitialPos = { offset: op.offset, width: op.width };
+          return;
+        }
       }
     }
 
-    // 6. Ponto Elétrico
+    // 7. Ponto Elétrico
     const hitPt = findPointAtScreen(sx, sy);
     if (hitPt) {
       pendingDragSnapshot = captureStateSnapshot();
@@ -712,7 +914,20 @@ window.CAD2D = (function () {
       return;
     }
 
-    // 7. Eletroduto
+    // 8. Porta, Janela ou Vão Livre
+    const hitOp = findOpeningAtScreen(sx, sy);
+    if (hitOp) {
+      pendingDragSnapshot = captureStateSnapshot();
+      selectedItem = { kind: 'opening', id: hitOp.id };
+      isDragging = true;
+      dragType = 'opening';
+      onSelectionChange(selectedItem);
+      notifyStateChange();
+      render();
+      return;
+    }
+
+    // 9. Eletroduto
     const hitConduit = findConduitAtScreen(sx, sy);
     if (hitConduit) {
       selectedItem = { kind: 'conduit', id: hitConduit.id };
@@ -722,7 +937,7 @@ window.CAD2D = (function () {
       return;
     }
 
-    // 8. Cômodo / Ambiente
+    // 10. Cômodo / Ambiente
     const hitRoom = findRoomAtWorld(world.x, world.y);
     if (hitRoom) {
       pendingDragSnapshot = captureStateSnapshot();
@@ -737,13 +952,63 @@ window.CAD2D = (function () {
       return;
     }
 
-    // 9. Vazio -> Desmarcar e Pan
+    // 11. Vazio -> Desmarcar e Pan
     selectedItem = null;
     onSelectionChange(null);
     notifyStateChange();
     isDragging = true;
     dragType = 'pan';
     dragInitialPos = { x: offsetX, y: offsetY };
+    render();
+  }
+
+  function placeNewOpeningAt(wx, wy, toolType, targetRoomId = null, targetWall = null) {
+    if (!project) return;
+    pushHistorySnapshot();
+    if (!Array.isArray(project.openings)) project.openings = [];
+
+    let snapInfo = null;
+    if (targetRoomId) {
+      const rm = project.rooms.find(r => r.id === targetRoomId);
+      if (rm) {
+        const wSide = targetWall || 's';
+        const wLen = (wSide === 'n' || wSide === 's') ? rm.w : rm.h;
+        snapInfo = { roomId: rm.id, room: rm, wall: wSide, offset: +(wLen / 2).toFixed(2), wallLen: wLen };
+      }
+    }
+    if (!snapInfo) {
+      snapInfo = findNearestWallSnap(wx, wy);
+    }
+    if (!snapInfo) return;
+
+    const countByType = project.openings.filter(o => o.type === toolType).length + 1;
+    const defaults = {
+      door: { width: 0.80, height: 2.10, sillHeight: 0.00, label: `P${countByType}` },
+      window: { width: 1.40, height: 1.10, sillHeight: 1.00, label: `J${countByType}` },
+      opening: { width: 1.20, height: 2.10, sillHeight: 0.00, label: `Vão ${countByType}` }
+    };
+    const cfg = defaults[toolType] || defaults.door;
+
+    const newOp = {
+      id: `op-${Date.now()}`,
+      type: toolType,
+      roomId: snapInfo.roomId,
+      wall: snapInfo.wall,
+      offset: snapInfo.offset,
+      width: Math.min(cfg.width, Math.max(0.5, snapInfo.wallLen - 0.2)),
+      height: cfg.height,
+      sillHeight: cfg.sillHeight,
+      swing: 'in-left',
+      label: cfg.label
+    };
+
+    project.openings.push(newOp);
+    selectedItem = { kind: 'opening', id: newOp.id };
+    setTool('select');
+    onSelectionChange(selectedItem);
+    notifyStateChange();
+    const typeLabel = toolType === 'door' ? 'Porta' : toolType === 'window' ? 'Janela' : 'Vão livre';
+    onProjectMutate(`${typeLabel} "${newOp.label}" inserida na parede!`);
     render();
   }
 
@@ -781,7 +1046,9 @@ window.CAD2D = (function () {
       hoveredHandle = findResizeHandleAtScreen(sx, sy);
       const hoverPt = !hoveredHandle ? findPointAtScreen(sx, sy) : null;
       hoveredPointId = hoverPt ? hoverPt.id : null;
-      const hoverRm = (!hoveredHandle && !hoverPt) ? findRoomAtWorld(world.x, world.y) : null;
+      const hoverOp = (!hoveredHandle && !hoverPt) ? findOpeningAtScreen(sx, sy) : null;
+      hoveredOpeningId = hoverOp ? hoverOp.id : null;
+      const hoverRm = (!hoveredHandle && !hoverPt && !hoverOp) ? findRoomAtWorld(world.x, world.y) : null;
       hoveredRoomId = hoverRm ? hoverRm.id : null;
       updateCursor();
       render();
@@ -792,6 +1059,32 @@ window.CAD2D = (function () {
       offsetX = dragInitialPos.x + (sx - dragStartScreen.x);
       offsetY = dragInitialPos.y + (sy - dragStartScreen.y);
       render();
+    } else if (dragType === 'opening' && selectedItem && selectedItem.kind === 'opening') {
+      // Arrastar Porta, Janela ou Vão ao longo da parede ou para qualquer outra parede!
+      const op = (project.openings || []).find(o => o.id === selectedItem.id);
+      if (op) {
+        const snapWall = findNearestWallSnap(world.x, world.y);
+        if (snapWall) {
+          op.roomId = snapWall.roomId;
+          op.wall = snapWall.wall;
+          const halfW = Number(op.width || 0.8) / 2;
+          op.offset = Math.max(halfW + 0.05, Math.min(snapWall.wallLen - halfW - 0.05, snapWall.offset));
+          render();
+        }
+      }
+    } else if (dragType === 'resize_opening' && selectedItem && selectedItem.kind === 'opening') {
+      // Redimensionar largura da Porta, Janela ou Vão pelas alças das extremidades
+      const op = (project.openings || []).find(o => o.id === selectedItem.id);
+      const room = op ? project.rooms.find(r => r.id === op.roomId) : null;
+      if (op && room) {
+        const isHoriz = op.wall === 'n' || op.wall === 's';
+        const along = isHoriz ? (world.x - room.x) : (world.y - room.y);
+        const wallLen = isHoriz ? room.w : room.h;
+        const distFromCenter = Math.abs(along - op.offset);
+        const newWidth = snap(Math.max(0.40, Math.min(wallLen - 0.2, distFromCenter * 2)), 0.05);
+        op.width = newWidth;
+        render();
+      }
     } else if (dragType === 'point' && selectedItem && selectedItem.kind === 'point') {
       const pt = project.points.find(p => p.id === selectedItem.id);
       if (pt) {
@@ -908,14 +1201,41 @@ window.CAD2D = (function () {
         h: newRoomPreview.h
       };
       project.rooms.push(newRoom);
+      // Cria porta e janela padrão no novo ambiente
+      if (!Array.isArray(project.openings)) project.openings = [];
+      project.openings.push({
+        id: `op-d-${newRoom.id}`,
+        type: 'door',
+        roomId: newRoom.id,
+        wall: 's',
+        offset: +(Math.min(0.65, newRoom.w * 0.3)).toFixed(2),
+        width: 0.80,
+        height: 2.10,
+        sillHeight: 0.00,
+        swing: 'in-left',
+        label: `P${project.openings.filter(o => o.type === 'door').length + 1}`
+      });
+      project.openings.push({
+        id: `op-w-${newRoom.id}`,
+        type: 'window',
+        roomId: newRoom.id,
+        wall: 'n',
+        offset: +(newRoom.w / 2).toFixed(2),
+        width: 1.20,
+        height: 1.10,
+        sillHeight: 1.00,
+        swing: 'in-left',
+        label: `J${project.openings.filter(o => o.type === 'window').length + 1}`
+      });
+
       populateSingleRoomNormativePoints(newRoom);
       selectedItem = { kind: 'room', id: newRoom.id };
       newRoomPreview = null;
       setTool('select');
       onSelectionChange(selectedItem);
       notifyStateChange();
-      onProjectMutate(`Ambiente "${newRoom.name}" (${newRoom.w}m × ${newRoom.h}m) criado!`);
-    } else if (dragType === 'point' || dragType === 'room' || dragType === 'resize_room') {
+      onProjectMutate(`Ambiente "${newRoom.name}" criado com porta, janela e pontos NBR 5410!`);
+    } else if (['point', 'room', 'resize_room', 'opening', 'resize_opening'].includes(dragType)) {
       const afterSnap = captureStateSnapshot();
       if (pendingDragSnapshot && afterSnap !== pendingDragSnapshot) {
         undoStack.push(pendingDragSnapshot);
@@ -1077,11 +1397,14 @@ window.CAD2D = (function () {
       );
     } else if (selectedItem.kind === 'conduit') {
       project.conduits = project.conduits.filter(c => c.id !== selectedItem.id);
+    } else if (selectedItem.kind === 'opening') {
+      project.openings = (project.openings || []).filter(o => o.id !== selectedItem.id);
     } else if (selectedItem.kind === 'room') {
       const rmId = selectedItem.id;
       const roomPtIds = new Set(project.points.filter(p => p.roomId === rmId && p.category !== 'qdc').map(p => p.id));
       project.points = project.points.filter(p => !roomPtIds.has(p.id));
       project.conduits = project.conduits.filter(c => !roomPtIds.has(c.fromId) && !roomPtIds.has(c.toId));
+      project.openings = (project.openings || []).filter(o => o.roomId !== rmId);
       project.rooms = project.rooms.filter(r => r.id !== rmId);
     }
     selectedItem = null;
@@ -1160,6 +1483,7 @@ window.CAD2D = (function () {
       ctx.restore();
     }
 
+    // 1. Cômodos e Paredes
     if (layers.architecture) {
       project.rooms.forEach(room => drawRoom(room));
       if (newRoomPreview) {
@@ -1170,8 +1494,31 @@ window.CAD2D = (function () {
           isPreview: true
         });
       }
+
+      // 2. Portas, Janelas e Vãos Livres (NBR 6492)
+      (project.openings || []).forEach(op => drawArchitecturalOpening2D(op, false));
+
+      // Pré-visualização (ghost) ao posicionar nova Porta, Janela ou Vão
+      if (['door', 'window', 'opening'].includes(activeTool)) {
+        const snapWall = findNearestWallSnap(mouseWorldPos.x, mouseWorldPos.y);
+        if (snapWall) {
+          drawArchitecturalOpening2D({
+            id: 'preview-op',
+            type: activeTool,
+            roomId: snapWall.roomId,
+            wall: snapWall.wall,
+            offset: snapWall.offset,
+            width: activeTool === 'door' ? 0.80 : activeTool === 'window' ? 1.40 : 1.20,
+            height: activeTool === 'window' ? 1.10 : 2.10,
+            sillHeight: activeTool === 'window' ? 1.00 : 0.00,
+            swing: 'in-left',
+            label: activeTool === 'door' ? 'Nova Porta' : activeTool === 'window' ? 'Nova Janela' : 'Novo Vão'
+          }, true);
+        }
+      }
     }
 
+    // 3. Eletrodutos e Condutores
     if (layers.conduits) {
       project.conduits.forEach(cd => drawConduitNBR(cd));
       if (activeTool === 'conduit' && conduitStartPointId) {
@@ -1192,6 +1539,7 @@ window.CAD2D = (function () {
       }
     }
 
+    // 4. Pontos Elétricos (NBR 5410 / 5444)
     project.points.forEach(pt => {
       if (pt.category === 'light' || pt.category === 'switch') {
         if (!layers.lighting) return;
@@ -1202,10 +1550,16 @@ window.CAD2D = (function () {
       drawNBR5410Symbol(pt);
     });
 
+    // 5. Alças de Redimensionamento do Cômodo ou Abertura Selecionada
     if (selectedItem && selectedItem.kind === 'room') {
       const selRoom = project.rooms.find(r => r.id === selectedItem.id);
       if (selRoom) {
         drawRoomSelectionHandles(selRoom);
+      }
+    } else if (selectedItem && selectedItem.kind === 'opening') {
+      const selOp = (project.openings || []).find(o => o.id === selectedItem.id);
+      if (selOp) {
+        drawOpeningSelectionHandles(selOp);
       }
     }
   }
@@ -1263,34 +1617,14 @@ window.CAD2D = (function () {
           : (typeInfo.color + '44');
     ctx.fillRect(pos.x, pos.y, rw, rh);
 
-    const wallThick = Math.max(4, Math.min(8, 0.12 * scale));
+    const wallThick = Math.max(5, Math.min(9, 0.13 * scale));
     ctx.strokeStyle = room.isPreview || isSelected ? '#f59e0b' : isHovered ? '#38bdf8' : '#cbd5e1';
     ctx.lineWidth = wallThick;
     ctx.strokeRect(pos.x, pos.y, rw, rh);
 
     ctx.strokeStyle = '#0f172a';
-    ctx.lineWidth = Math.max(1.5, wallThick - 3);
+    ctx.lineWidth = Math.max(1.5, wallThick - 3.2);
     ctx.strokeRect(pos.x, pos.y, rw, rh);
-
-    const doorW = Math.min(0.80 * scale, rw * 0.32);
-    const doorX = pos.x + 14;
-    const doorY = pos.y + rh;
-    ctx.fillStyle = '#070b14';
-    ctx.fillRect(doorX - 1, doorY - wallThick / 2 - 1, doorW + 2, wallThick + 2);
-    ctx.strokeStyle = '#94a3b8';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(doorX, doorY);
-    ctx.lineTo(doorX, doorY - doorW);
-    ctx.stroke();
-
-    ctx.setLineDash([3, 3]);
-    ctx.strokeStyle = 'rgba(148, 163, 184, 0.55)';
-    ctx.lineWidth = 1.2;
-    ctx.beginPath();
-    ctx.arc(doorX, doorY, doorW, -Math.PI / 2, 0);
-    ctx.stroke();
-    ctx.setLineDash([]);
 
     const area = (room.w * room.h).toFixed(2);
     const perim = (2 * (room.w + room.h)).toFixed(2);
@@ -1316,6 +1650,159 @@ window.CAD2D = (function () {
       ctx.restore();
     }
 
+    ctx.restore();
+  }
+
+  // ==================== DESENHO 2D DE PORTAS, JANELAS E VÃOS (ABNT NBR 6492) ====================
+  function drawArchitecturalOpening2D(op, isGhost) {
+    const room = project.rooms.find(r => r.id === op.roomId);
+    if (!room) return;
+    const geom = window.NBR5410.getOpeningWorldGeometry(op, room);
+    if (!geom) return;
+
+    const sc = worldToScreen(geom.cx, geom.cy);
+    const lenPx = geom.width * scale;
+    const halfPx = lenPx / 2;
+    const wallThick = Math.max(6, Math.min(11, 0.15 * scale));
+
+    const isSelected = selectedItem && selectedItem.kind === 'opening' && selectedItem.id === op.id;
+    const isHovered = hoveredOpeningId === op.id && !isSelected;
+
+    // Ângulo do eixo tangente da parede
+    const wallAngle = Math.atan2(geom.ty, geom.tx);
+    // Verifica para qual lado aponta a normal interna no sistema local rotacionado
+    // No sistema local rotacionado por wallAngle: +X é ao longo da parede; +Y é (-ty, tx).
+    // Produto escalar entre (nx, ny) e (-ty, tx):
+    const normalSign = (geom.nx * (-geom.ty) + geom.ny * geom.tx) >= 0 ? 1 : -1;
+
+    ctx.save();
+    if (isGhost) ctx.globalAlpha = 0.68;
+    ctx.translate(sc.x, sc.y);
+    ctx.rotate(wallAngle);
+
+    // 1. Limpa/Recorta o trecho da parede onde está a abertura
+    ctx.fillStyle = '#070b14';
+    ctx.fillRect(-halfPx - 1, -wallThick / 2 - 1.5, lenPx + 2, wallThick + 3);
+
+    // Traços de boneca/arremate da alvenaria nas duas extremidades
+    ctx.strokeStyle = isSelected ? '#f59e0b' : isHovered ? '#38bdf8' : '#cbd5e1';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(-halfPx, -wallThick / 2);
+    ctx.lineTo(-halfPx, wallThick / 2);
+    ctx.moveTo(halfPx, -wallThick / 2);
+    ctx.lineTo(halfPx, wallThick / 2);
+    ctx.stroke();
+
+    if (op.type === 'door') {
+      // SÍMBOLO NBR 6492: PORTA DE GIRO (Batentes + Folha a 90° + Arco de Giro)
+      const swing = op.swing || 'in-left';
+      const dirY = swing.startsWith('in') ? normalSign : -normalSign;
+      const hingeAtLeft = swing.endsWith('left');
+      const hx = hingeAtLeft ? -halfPx : halfPx;
+
+      // Folha dupla retangular da porta (espessura 4cm)
+      const leafColor = isSelected ? '#f59e0b' : isHovered ? '#38bdf8' : '#fbbf24';
+      ctx.fillStyle = 'rgba(245, 158, 11, 0.22)';
+      ctx.strokeStyle = leafColor;
+      ctx.lineWidth = 2;
+
+      const leafThick = 4;
+      const leafX = hingeAtLeft ? hx : hx - leafThick;
+      const leafY = dirY > 0 ? 0 : -lenPx;
+      ctx.fillRect(leafX, leafY, leafThick, lenPx);
+      ctx.strokeRect(leafX, leafY, leafThick, lenPx);
+
+      // Arco de abertura de 90° tracejado
+      ctx.beginPath();
+      ctx.setLineDash([4, 3]);
+      ctx.strokeStyle = isSelected ? '#fde047' : 'rgba(251, 191, 36, 0.75)';
+      ctx.lineWidth = 1.4;
+      if (hingeAtLeft && dirY > 0) {
+        ctx.arc(hx, 0, lenPx, 0, Math.PI / 2, false);
+      } else if (hingeAtLeft && dirY < 0) {
+        ctx.arc(hx, 0, lenPx, -Math.PI / 2, 0, false);
+      } else if (!hingeAtLeft && dirY > 0) {
+        ctx.arc(hx, 0, lenPx, Math.PI / 2, Math.PI, false);
+      } else {
+        ctx.arc(hx, 0, lenPx, Math.PI, Math.PI * 1.5, false);
+      }
+      ctx.stroke();
+      ctx.setLineDash([]);
+    } else if (op.type === 'window') {
+      // SÍMBOLO NBR 6492: JANELA / ESQUADRIA (4 linhas paralelas: peitoril externo/interno + 2 linhas de caixilho/vidro)
+      const winColor = isSelected ? '#f59e0b' : isHovered ? '#7dd3fc' : '#38bdf8';
+      ctx.fillStyle = 'rgba(56, 189, 248, 0.16)';
+      ctx.fillRect(-halfPx, -wallThick / 2, lenPx, wallThick);
+
+      // Linhas externas do peitoril
+      ctx.strokeStyle = '#94a3b8';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(-halfPx, -wallThick / 2);
+      ctx.lineTo(halfPx, -wallThick / 2);
+      ctx.moveTo(-halfPx, wallThick / 2);
+      ctx.lineTo(halfPx, wallThick / 2);
+      ctx.stroke();
+
+      // Duas linhas internas representando os planos de vidro (esquadria de correr)
+      ctx.strokeStyle = winColor;
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      ctx.moveTo(-halfPx, -1.8);
+      ctx.lineTo(halfPx, -1.8);
+      ctx.moveTo(-halfPx, 1.8);
+      ctx.lineTo(halfPx, 1.8);
+      // Montante central divisório
+      ctx.moveTo(0, -wallThick / 2);
+      ctx.lineTo(0, wallThick / 2);
+      ctx.stroke();
+    } else if (op.type === 'opening') {
+      // SÍMBOLO NBR 6492: VÃO LIVRE / PASSAGEM SEM PORTA (Projeção tracejada da verga superior)
+      const openColor = isSelected ? '#f59e0b' : isHovered ? '#c084fc' : '#a855f7';
+      ctx.setLineDash([4, 3]);
+      ctx.strokeStyle = openColor;
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.moveTo(-halfPx, -wallThick / 2);
+      ctx.lineTo(halfPx, -wallThick / 2);
+      ctx.moveTo(-halfPx, wallThick / 2);
+      ctx.lineTo(halfPx, wallThick / 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    ctx.restore();
+
+    // Etiqueta técnica da esquadria/abertura (ex: P1 0.80×2.10 | J1 1.40×1.10)
+    if (layers.labels) {
+      ctx.save();
+      const tx = sc.x - geom.nx * 14;
+      const ty = sc.y - geom.ny * 14;
+      ctx.fillStyle = isSelected ? '#fde047' : op.type === 'window' ? '#7dd3fc' : op.type === 'opening' ? '#d8b4fe' : '#fde68a';
+      ctx.font = '700 9px JetBrains Mono, monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      const dimTxt = `${op.label || ''} (${geom.width.toFixed(2)}×${Number(op.height || 2.1).toFixed(2)})`.trim();
+      ctx.fillText(dimTxt, tx, ty);
+      ctx.restore();
+    }
+  }
+
+  function drawOpeningSelectionHandles(op) {
+    const handles = getOpeningResizeHandles(op);
+    if (handles.length === 0) return;
+
+    ctx.save();
+    handles.forEach(h => {
+      const isHover = hoveredHandle === h.id || activeResizeHandle === h.id;
+      const sz = isHover ? 11 : 9;
+      ctx.fillStyle = isHover ? '#38bdf8' : '#f59e0b';
+      ctx.strokeStyle = '#0f172a';
+      ctx.lineWidth = 2;
+      ctx.fillRect(h.x - sz / 2, h.y - sz / 2, sz, sz);
+      ctx.strokeRect(h.x - sz / 2, h.y - sz / 2, sz, sz);
+    });
     ctx.restore();
   }
 
@@ -1725,6 +2212,8 @@ window.CAD2D = (function () {
     duplicateSelected,
     deleteSelectedItem,
     rotateSelectedPoint,
+    flipSelectedOpeningSwing,
+    placeNewOpeningAt,
     populateSingleRoomNormativePoints,
     render,
     renderProjectPreviewToCanvas,

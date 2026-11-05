@@ -281,6 +281,39 @@
           </div>
 
           <div class="sidebar-section">
+            <div class="sidebar-section-title">Portas, Janelas &amp; Vãos (2D/3D)</div>
+            <div class="tool-grid" style="grid-template-columns: 1fr 1fr 1fr;">
+              <button class="tool-btn" data-tool="door" onclick="App.selectCadTool('door', this)" title="Inserir Porta na Parede (Clique na Parede)">
+                <svg viewBox="0 0 26 24" fill="none">
+                  <line x1="2" y1="20" x2="6" y2="20" stroke="#cbd5e1" stroke-width="2.5"/>
+                  <line x1="20" y1="20" x2="24" y2="20" stroke="#cbd5e1" stroke-width="2.5"/>
+                  <rect x="6" y="6" width="2.5" height="14" fill="#f59e0b"/>
+                  <path d="M 8.5 6 A 14 14 0 0 1 20 20" stroke="#fbbf24" stroke-width="1.6" stroke-dasharray="2 2"/>
+                </svg>
+                Porta
+              </button>
+              <button class="tool-btn" data-tool="window" onclick="App.selectCadTool('window', this)" title="Inserir Janela na Parede (Clique na Parede)">
+                <svg viewBox="0 0 26 24" fill="none">
+                  <rect x="3" y="8" width="20" height="8" stroke="#94a3b8" stroke-width="1.8" fill="rgba(56,189,248,0.18)"/>
+                  <line x1="3" y1="11" x2="23" y2="11" stroke="#38bdf8" stroke-width="1.6"/>
+                  <line x1="3" y1="13" x2="23" y2="13" stroke="#38bdf8" stroke-width="1.6"/>
+                  <line x1="13" y1="8" x2="13" y2="16" stroke="#38bdf8" stroke-width="1.6"/>
+                </svg>
+                Janela
+              </button>
+              <button class="tool-btn" data-tool="opening" onclick="App.selectCadTool('opening', this)" title="Inserir Vão Livre / Passagem na Parede">
+                <svg viewBox="0 0 26 24" fill="none">
+                  <line x1="2" y1="8" x2="2" y2="16" stroke="#cbd5e1" stroke-width="2.5"/>
+                  <line x1="24" y1="8" x2="24" y2="16" stroke="#cbd5e1" stroke-width="2.5"/>
+                  <line x1="2" y1="9" x2="24" y2="9" stroke="#a855f7" stroke-width="1.8" stroke-dasharray="3 2"/>
+                  <line x1="2" y1="15" x2="24" y2="15" stroke="#a855f7" stroke-width="1.8" stroke-dasharray="3 2"/>
+                </svg>
+                Vão Livre
+              </button>
+            </div>
+          </div>
+
+          <div class="sidebar-section">
             <div class="sidebar-section-title">
               <span>Cômodos da Planta</span>
               <button class="btn btn-primary btn-sm" style="padding:2px 8px; font-size:11px;" onclick="App.openAddRoomModal()">+ Novo</button>

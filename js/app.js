@@ -767,10 +767,18 @@ window.App = (function () {
                 oninput="App.updateRoomDimensionLive('${room.id}', 'y', parseFloat(this.value))" />
             </div>
           </div>
-          <div id="roomNormSummaryBox" style="background:var(--bg-primary); padding:10px; border-radius:6px; font-size:12px; margin-bottom:12px; border:1px solid var(--border-subtle);">
+          <div id="roomNormSummaryBox" style="background:var(--bg-primary); padding:10px; border-radius:6px; font-size:12px; margin-bottom:10px; border:1px solid var(--border-subtle);">
             <div>Área: <strong class="mono">${comp.area} m²</strong> | Perímetro: <strong class="mono">${comp.perimeter} m</strong></div>
             <div style="margin-top:4px;">Mín. Iluminação NBR: <strong class="mono">${comp.minLightingVA} VA</strong> (Atual: ${comp.installedLightingVA} VA)</div>
             <div>Mín. TUGs NBR: <strong class="mono">${comp.minTugCount} un / ${comp.minTugVA} VA</strong> (Atual: ${comp.installedTugCount} un / ${comp.installedTugVA} VA)</div>
+          </div>
+          <div style="margin-bottom:10px;">
+            <label style="display:block; font-size:11px; font-weight:700; color:var(--text-muted); margin-bottom:6px; text-transform:uppercase;">Inserir Abertura Neste Cômodo</label>
+            <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px;">
+              <button class="btn btn-secondary btn-sm" onclick="App.addOpeningToRoom('${room.id}', 'door')">+ Porta</button>
+              <button class="btn btn-secondary btn-sm" onclick="App.addOpeningToRoom('${room.id}', 'window')">+ Janela</button>
+              <button class="btn btn-secondary btn-sm" onclick="App.addOpeningToRoom('${room.id}', 'opening')">+ Vão</button>
+            </div>
           </div>
           <div style="display:flex; flex-direction:column; gap:7px;">
             <button class="btn btn-primary btn-block btn-sm" onclick="App.regenerateSingleRoomPoints('${room.id}')">
@@ -781,6 +789,102 @@ window.App = (function () {
             </button>
             <button class="btn btn-danger btn-block btn-sm" onclick="CAD2D.deleteSelectedItem()">
               Excluir Cômodo
+            </button>
+          </div>
+        </div>
+      `;
+    } else if (selection.kind === 'opening') {
+      const op = (currentProject.openings || []).find(o => o.id === selection.id);
+      if (!op) return;
+      const roomOptions = currentProject.rooms.map(r =>
+        `<option value="${r.id}" ${op.roomId === r.id ? 'selected' : ''}>${r.name}</option>`
+      ).join('');
+      const typeTitle = op.type === 'door' ? 'Porta de Giro' : op.type === 'window' ? 'Janela / Esquadria' : 'Vão Livre / Passagem';
+
+      box.innerHTML = `
+        <div class="sidebar-section">
+          <div class="sidebar-section-title">
+            <span>${typeTitle}</span>
+            <span class="badge badge-blue">2D &amp; 3D</span>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Tipo de Abertura</label>
+              <select class="form-select" onchange="App.updateOpeningProp('${op.id}', 'type', this.value)">
+                <option value="door" ${op.type === 'door' ? 'selected' : ''}>Porta de Giro</option>
+                <option value="window" ${op.type === 'window' ? 'selected' : ''}>Janela</option>
+                <option value="opening" ${op.type === 'opening' ? 'selected' : ''}>Vão Livre</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Código / Etiqueta</label>
+              <input type="text" class="form-input mono" value="${op.label || ''}"
+                oninput="App.updateOpeningPropLive('${op.id}', 'label', this.value)" />
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Ambiente</label>
+              <select class="form-select" onchange="App.updateOpeningProp('${op.id}', 'roomId', this.value)">
+                ${roomOptions}
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Parede</label>
+              <select class="form-select" onchange="App.updateOpeningProp('${op.id}', 'wall', this.value)">
+                <option value="n" ${op.wall === 'n' ? 'selected' : ''}>Norte (Superior)</option>
+                <option value="s" ${op.wall === 's' ? 'selected' : ''}>Sul (Inferior)</option>
+                <option value="w" ${op.wall === 'w' ? 'selected' : ''}>Oeste (Esquerda)</option>
+                <option value="e" ${op.wall === 'e' ? 'selected' : ''}>Leste (Direita)</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Posição na Parede (m)</label>
+              <input type="number" step="0.1" min="0.3" class="form-input mono" value="${op.offset}"
+                oninput="App.updateOpeningPropLive('${op.id}', 'offset', parseFloat(this.value))" />
+            </div>
+            <div class="form-group">
+              <label>Largura do Vão (m)</label>
+              <input type="number" step="0.05" min="0.4" max="5.0" class="form-input mono" value="${op.width}"
+                oninput="App.updateOpeningPropLive('${op.id}', 'width', parseFloat(this.value))" />
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Altura (m)</label>
+              <input type="number" step="0.05" min="0.4" max="2.7" class="form-input mono" value="${op.height ?? 2.1}"
+                oninput="App.updateOpeningPropLive('${op.id}', 'height', parseFloat(this.value))" />
+            </div>
+            <div class="form-group">
+              <label>Peitoril Z (m)</label>
+              <input type="number" step="0.05" min="0.0" max="2.2" class="form-input mono" value="${op.sillHeight ?? 0}"
+                oninput="App.updateOpeningPropLive('${op.id}', 'sillHeight', parseFloat(this.value))" />
+            </div>
+          </div>
+          ${op.type === 'door' ? `
+          <div class="form-group">
+            <label>Sentido de Abertura da Folha (Giro 90°)</label>
+            <select class="form-select" onchange="App.updateOpeningProp('${op.id}', 'swing', this.value)">
+              <option value="in-left" ${op.swing === 'in-left' ? 'selected' : ''}>Para Dentro • Dobradiça à Esquerda</option>
+              <option value="in-right" ${op.swing === 'in-right' ? 'selected' : ''}>Para Dentro • Dobradiça à Direita</option>
+              <option value="out-left" ${op.swing === 'out-left' ? 'selected' : ''}>Para Fora • Dobradiça à Esquerda</option>
+              <option value="out-right" ${op.swing === 'out-right' ? 'selected' : ''}>Para Fora • Dobradiça à Direita</option>
+            </select>
+          </div>
+          ` : ''}
+          <div style="display:flex; flex-direction:column; gap:7px; margin-top:8px;">
+            ${op.type === 'door' ? `
+            <button class="btn btn-primary btn-block btn-sm" onclick="CAD2D.flipSelectedOpeningSwing()">
+              Inverter Lado de Abertura (Tecla R)
+            </button>
+            ` : ''}
+            <button class="btn btn-secondary btn-block btn-sm" onclick="CAD2D.duplicateSelected()">
+              Duplicar Abertura (Ctrl+D)
+            </button>
+            <button class="btn btn-danger btn-block btn-sm" onclick="CAD2D.deleteSelectedItem()">
+              Remover Abertura (Delete)
             </button>
           </div>
         </div>
@@ -986,6 +1090,46 @@ window.App = (function () {
     saveProjectsToStorage();
     window.CAD2D.render();
     renderPropertyInspector({ kind: 'conduit', id: cdId });
+  }
+
+  function addOpeningToRoom(roomId, openingType) {
+    if (!currentProject) return;
+    const room = currentProject.rooms.find(r => r.id === roomId);
+    if (!room) return;
+    const defaultWall = openingType === 'window' ? 'n' : openingType === 'opening' ? 'e' : 's';
+    window.CAD2D.placeNewOpeningAt(room.x + room.w / 2, room.y + room.h / 2, openingType, roomId, defaultWall);
+  }
+
+  function updateOpeningPropLive(opId, prop, val) {
+    if (!currentProject || !Array.isArray(currentProject.openings)) return;
+    if (typeof val === 'number' && isNaN(val)) return;
+    const op = currentProject.openings.find(o => o.id === opId);
+    if (!op) return;
+    op[prop] = val;
+    saveProjectsToStorage();
+    window.CAD2D.render();
+    window.Viewer3D.render();
+  }
+
+  function updateOpeningProp(opId, prop, val) {
+    if (!currentProject || !Array.isArray(currentProject.openings)) return;
+    window.CAD2D.pushHistorySnapshot();
+    const op = currentProject.openings.find(o => o.id === opId);
+    if (!op) return;
+    op[prop] = val;
+    if (prop === 'type') {
+      if (val === 'window' && Number(op.sillHeight) === 0) {
+        op.sillHeight = 1.00;
+        op.height = 1.10;
+      } else if (val !== 'window') {
+        op.sillHeight = 0.00;
+        op.height = 2.10;
+      }
+    }
+    saveProjectsToStorage();
+    window.CAD2D.render();
+    window.Viewer3D.render();
+    renderPropertyInspector({ kind: 'opening', id: opId });
   }
 
   // ==================== ABA 3: AMBIENTES & PREVISÃO DE CARGAS (EDITÁVEL) ====================
@@ -1368,6 +1512,9 @@ window.App = (function () {
     updatePointPropLive,
     updatePointProp,
     updateConduitProp,
+    addOpeningToRoom,
+    updateOpeningPropLive,
+    updateOpeningProp,
     updateCircuitProp,
     addNewCircuit,
     runAutoBalancePhases,

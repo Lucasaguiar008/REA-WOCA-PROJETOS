@@ -94,12 +94,12 @@ window.NBR5410 = (function () {
       if (pt.category === 'light') {
         installedLightingVA += Number(pt.powerVA || 100);
       } else if (pt.category === 'tug') {
-        const mult = pt.subtype === 'tug_tripla' ? 3 : pt.subtype === 'tug_dupla' ? 2 : 1;
+        const mult = pt.subtype === 'tug_tripla' || pt.subtype === 'tripla' || pt.gangCount === 3 ? 3 : (pt.subtype === 'tug_dupla' || pt.subtype === 'dupla' || pt.gangCount === 2 ? 2 : 1);
         installedTugCount += mult;
         installedTugVA += Number(pt.powerVA || (100 * mult));
-      } else if (pt.category === 'tue') {
+      } else if (pt.category === 'tue' || pt.category === 'tomada_trifasica' || pt.subtype === 'trifasica') {
         installedTueVA += Number(pt.powerVA || 0);
-        tueList.push(pt.label || 'TUE');
+        tueList.push(pt.label || (pt.category === 'tomada_trifasica' ? 'Tomada 3Φ Trifásica' : 'TUE'));
       }
     });
 
@@ -830,11 +830,12 @@ window.NBR5410 = (function () {
     }
 
     const lightsCount = project.points.filter(p => p.category === 'light').length;
-    const tugSimplesCount = project.points.filter(p => p.category === 'tug' && p.subtype !== 'tug_dupla' && p.subtype !== 'tug_tripla' && Number(p.powerVA) <= 100).length;
-    const tugDuplaCount = project.points.filter(p => p.category === 'tug' && p.subtype === 'tug_dupla').length;
-    const tugTriplaCount = project.points.filter(p => p.category === 'tug' && p.subtype === 'tug_tripla').length;
-    const tugsHighCount = project.points.filter(p => p.category === 'tug' && p.subtype !== 'tug_dupla' && p.subtype !== 'tug_tripla' && Number(p.powerVA) > 100).length;
+    const tugSimplesCount = project.points.filter(p => p.category === 'tug' && p.subtype !== 'tug_dupla' && p.subtype !== 'dupla' && p.subtype !== 'tug_tripla' && p.subtype !== 'tripla' && Number(p.powerVA) <= 100).length;
+    const tugDuplaCount = project.points.filter(p => p.category === 'tug' && (p.subtype === 'tug_dupla' || p.subtype === 'dupla' || p.gangCount === 2)).length;
+    const tugTriplaCount = project.points.filter(p => p.category === 'tug' && (p.subtype === 'tug_tripla' || p.subtype === 'tripla' || p.gangCount === 3)).length;
+    const tugsHighCount = project.points.filter(p => p.category === 'tug' && p.subtype !== 'tug_dupla' && p.subtype !== 'dupla' && p.subtype !== 'tug_tripla' && p.subtype !== 'tripla' && Number(p.powerVA) > 100).length;
     const tuesCount = project.points.filter(p => p.category === 'tue').length;
+    const trifasicaCount = project.points.filter(p => p.category === 'tomada_trifasica' || p.subtype === 'trifasica').length;
     const switchesCount = project.points.filter(p => p.category === 'switch').length;
     const sensorsCount = project.points.filter(p => p.category === 'sensor').length;
     const telecomCount = project.points.filter(p => p.category === 'telecom').length;
@@ -843,7 +844,7 @@ window.NBR5410 = (function () {
     const jboxCount = project.points.filter(p => p.category === 'jbox').length;
     const partialBoardsCount = project.points.filter(p => p.category === 'qdc' && p.subtype === 'quadro_parcial').length;
 
-    const wallBoxesCount = tugSimplesCount + tugDuplaCount + tugTriplaCount + tugsHighCount + tuesCount + switchesCount + telecomCount + bellCount;
+    const wallBoxesCount = tugSimplesCount + tugDuplaCount + tugTriplaCount + tugsHighCount + tuesCount + trifasicaCount + switchesCount + telecomCount + bellCount;
 
     items.push({
       category: 'Eletrodutos, Eletrocalhas e Caixas',
@@ -911,6 +912,16 @@ window.NBR5410 = (function () {
         unit: 'un',
         qty: tugsHighCount + tuesCount,
         unitPrice: 21.50
+      });
+    }
+    if (trifasicaCount > 0) {
+      items.push({
+        category: 'Tomadas, Interruptores e Iluminação',
+        code: 'TOM-TRIF-32A',
+        description: 'Conjunto Tomada Industrial Trifásica 3P+T 32A/380V (IEC 60309 / NBR 5410)',
+        unit: 'un',
+        qty: trifasicaCount,
+        unitPrice: 68.90
       });
     }
     if (switchesCount > 0) {
@@ -1162,6 +1173,234 @@ window.NBR5410 = (function () {
     };
   }
 
+  // ============================================================================
+  // VERIFICADOR DE INCOMPATIBILIDADES E CONFORMIDADE TÉCNICA (NBR 5410)
+  // ============================================================================
+  function checkProjectIncompatibilities(project) {
+    if (!project) return { criticalCount: 0, warningCount: 0, items: [] };
+
+    const items = [];
+    const supplySystem = project.supply?.system || 'Monofásico';
+    const normSys = supplySystem.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    const isMono = normSys.startsWith('mono');
+    const isBi = normSys.startsWith('bi');
+    const isTri = normSys.startsWith('tri');
+
+    // 1. Checagem de Tomadas Trifásicas vs Sistema de Fornecimento
+    const trifasicaPoints = (project.points || []).filter(
+      p => p.category === 'tomada_trifasica' || p.subtype === 'trifasica' || !!p.isThreePhase
+    );
+
+    if (trifasicaPoints.length > 0 && isMono) {
+      items.push({
+        id: 'incomp-trifasica-mono',
+        severity: 'critical',
+        category: 'Fornecimento Elétrico',
+        title: `Tomada Trifásica (${trifasicaPoints.length}x) em Projeto Monofásico`,
+        description: `O projeto possui ${trifasicaPoints.length} tomada(s) trifásica(s) (3Φ / 3P+T), porém o Padrão de Entrada da concessionária está configurado como Monofásico (1F+N). A rede não possui as 3 fases (R, S, T) necessárias para alimentar essas tomadas industriais.`,
+        actionType: 'set_system_trifasico',
+        actionLabel: 'Alterar Sistema para Trifásico (3F+N)',
+        badge: 'Incompatibilidade Crítica'
+      });
+    } else if (trifasicaPoints.length > 0 && isBi) {
+      items.push({
+        id: 'incomp-trifasica-bi',
+        severity: 'critical',
+        category: 'Fornecimento Elétrico',
+        title: `Tomada Trifásica (${trifasicaPoints.length}x) em Projeto Bifásico`,
+        description: `O projeto possui ${trifasicaPoints.length} tomada(s) trifásica(s) (3Φ), mas o Padrão de Entrada é Bifásico (2F+N). Tomadas e motores trifásicos exigem 3 fases ativas.`,
+        actionType: 'set_system_trifasico',
+        actionLabel: 'Alterar Sistema para Trifásico (3F+N)',
+        badge: 'Incompatibilidade Crítica'
+      });
+    }
+
+    // 2. Checagem de Circuitos vs Sistema de Fornecimento
+    (project.circuits || []).forEach(c => {
+      const isCircTri = (c.phase && c.phase.includes('R') && c.phase.includes('S') && c.phase.includes('T')) || c.poles === 3;
+      const isCircBi = (c.phase && (c.phase.match(/,/g) || []).length === 1) || c.poles === 2;
+
+      if (isCircTri && (isMono || isBi)) {
+        items.push({
+          id: `incomp-circ-tri-${c.id}`,
+          severity: 'critical',
+          category: 'Circuitos & Barramento',
+          title: `Circuito ${c.id} (${c.name}) Trifásico em Rede ${supplySystem}`,
+          description: `O circuito ${c.id} foi configurado como trifásico (3P / R,S,T), mas o fornecimento do projeto é ${supplySystem}.`,
+          actionType: 'set_system_trifasico',
+          actionLabel: 'Alterar Sistema para Trifásico',
+          badge: 'Incompatibilidade Crítica'
+        });
+      } else if (isCircBi && isMono) {
+        items.push({
+          id: `incomp-circ-bi-${c.id}`,
+          severity: 'critical',
+          category: 'Circuitos & Barramento',
+          title: `Circuito ${c.id} (${c.name}) Bifásico em Rede Monofásica`,
+          description: `O circuito ${c.id} utiliza 2 fases (bifásico), porém o Padrão de Entrada da concessionária é Monofásico (1F+N).`,
+          actionType: 'set_system_bifasico',
+          actionLabel: 'Alterar Sistema para Bifásico ou Trifásico',
+          badge: 'Incompatibilidade Crítica'
+        });
+      }
+    });
+
+    // 3. Pontos sem Circuito Associado
+    const pointsWithoutCircuit = (project.points || []).filter(
+      p => !['qdc', 'padrao', 'caixa_passagem', 'conduit_sobe', 'conduit_desce'].includes(p.category) &&
+           (!p.circuitId || p.circuitId === '—' || !project.circuits.some(c => c.id === p.circuitId))
+    );
+
+    if (pointsWithoutCircuit.length > 0) {
+      items.push({
+        id: 'incomp-points-no-circuit',
+        severity: 'warning',
+        category: 'Distribuição de Circuitos',
+        title: `${pointsWithoutCircuit.length} Ponto(s) sem Circuito de Proteção`,
+        description: `Existem ${pointsWithoutCircuit.length} componentes na planta baixa (tomadas, interruptores ou luminárias) sem circuito atribuído no quadro de distribuição.`,
+        actionType: 'auto_assign_circuits',
+        actionLabel: 'Distribuir Circuitos Automaticamente',
+        badge: 'Alerta Normativo'
+      });
+    }
+
+    // 4. Mistura de Iluminação e Tomadas no mesmo circuito (NBR 5410 item 9.5.3.1)
+    (project.circuits || []).forEach(c => {
+      const circPoints = (project.points || []).filter(p => p.circuitId === c.id);
+      const hasLight = circPoints.some(p => p.category === 'light');
+      const hasPower = circPoints.some(p => ['tug', 'tue', 'tomada_trifasica'].includes(p.category));
+
+      if (hasLight && hasPower) {
+        items.push({
+          id: `incomp-mix-light-tug-${c.id}`,
+          severity: 'warning',
+          category: 'Separação de Circuitos NBR 5410',
+          title: `Mistura de Iluminação e Tomadas no Circuito ${c.id}`,
+          description: `A NBR 5410 (item 9.5.3.1) proíbe a mistura de pontos de iluminação com tomadas de uso geral no mesmo circuito para garantir segurança e continuidade do serviço.`,
+          actionType: 'separate_circuit',
+          actionLabel: 'Separar em Circuitos Distintos',
+          badge: 'Violação NBR 5410'
+        });
+      }
+    });
+
+    // 5. Cargas TUE de Alta Potência compartilhando circuito com TUG comum (NBR 5410 item 9.5.3.2)
+    (project.circuits || []).forEach(c => {
+      const circPoints = (project.points || []).filter(p => p.circuitId === c.id);
+      const highTue = circPoints.filter(p => (p.category === 'tue' || p.category === 'tomada_trifasica') && Number(p.powerVA) >= 1500);
+      const commonTugs = circPoints.filter(p => p.category === 'tug');
+
+      if (highTue.length > 0 && commonTugs.length > 0) {
+        items.push({
+          id: `incomp-tue-shared-${c.id}`,
+          severity: 'warning',
+          category: 'Circuitos Independentes TUE',
+          title: `Carga TUE (${highTue.map(t => t.label || 'TUE').join(', ')}) compartilhada no Circuito ${c.id}`,
+          description: `Equipamentos com corrente nominal superior a 10A ou alta potência (chuveiro, ar-condicionado, forno elétrico, tomada trifásica) devem ter circuito terminal exclusivo (NBR 5410 item 9.5.3.2).`,
+          actionType: 'dedicate_tue_circuit',
+          actionLabel: 'Mover TUE para Circuito Exclusivo',
+          badge: 'Violação NBR 5410'
+        });
+      }
+    });
+
+    // 6. Avaliação de Condutores, Disjuntores e Queda de Tensão (Ib <= In <= Iz)
+    try {
+      const evaluated = evaluateProjectCircuits(project);
+      evaluated.forEach(c => {
+        if (c.ib > c.breakerA) {
+          items.push({
+            id: `incomp-overload-${c.id}`,
+            severity: 'critical',
+            category: 'Dimensionamento & Proteção',
+            title: `Sobrecarga no Circuito ${c.id} (Ib = ${c.ib}A > DJ ${c.breakerA}A)`,
+            description: `A corrente nominal de projeto (${c.ib} A) é superior à capacidade nominal do disjuntor (${c.breakerA} A), causando risco de desarme constante.`,
+            actionType: 'upsize_breaker',
+            actionLabel: `Redimensionar Disjuntor para ${c.breakerA >= 20 ? 25 : 20}A`,
+            badge: 'Risco de Desarme'
+          });
+        }
+        if (c.breakerA > c.izReal) {
+          items.push({
+            id: `incomp-unprotected-cable-${c.id}`,
+            severity: 'critical',
+            category: 'Proteção Térmica de Cabos',
+            title: `Condutor Desprotegido no Circuito ${c.id} (In = ${c.breakerA}A > Iz = ${c.izReal}A)`,
+            description: `O disjuntor de ${c.breakerA}A não protege o cabo #${c.sectionMm2}mm² (capacidade Iz de ${c.izReal}A). Em sobrecarga, o cabo aquece antes do disjuntor desarmar (critério Ib ≤ In ≤ Iz da NBR 5410).`,
+            actionType: 'upsize_conductor',
+            actionLabel: `Aumentar Cabo para #${c.sectionMm2 < 4 ? 4 : 6}mm²`,
+            badge: 'Risco Térmico'
+          });
+        }
+        if (c.voltageDropPercent > 4.0) {
+          items.push({
+            id: `incomp-vdrop-${c.id}`,
+            severity: 'warning',
+            category: 'Queda de Tensão (NBR 5410)',
+            title: `Queda de Tensão Excessiva no Circuito ${c.id} (ΔV = ${c.voltageDropPercent}%)`,
+            description: `A queda de tensão calculada ultrapassa o limite normativo de 4,0% para circuitos terminais da NBR 5410.`,
+            actionType: 'upsize_conductor',
+            actionLabel: 'Aumentar Bitola do Condutor',
+            badge: 'Limite 4% Excedido'
+          });
+        }
+        if (c.conduitOccupancyPct > 40.0) {
+          items.push({
+            id: `incomp-conduit-occ-${c.id}`,
+            severity: 'warning',
+            category: 'Taxa de Ocupação de Eletroduto',
+            title: `Eletroduto do Circuito ${c.id} Superlotado (${c.conduitOccupancyPct}%)`,
+            description: `A taxa de ocupação dos cabos no eletroduto ultrapassa o limite máximo de 40% da NBR 5410 para 3 ou mais condutores.`,
+            actionType: 'upsize_conduit',
+            actionLabel: 'Aumentar Diâmetro do Eletroduto',
+            badge: 'Ocupação > 40%'
+          });
+        }
+      });
+    } catch (e) {
+      console.warn('Erro ao avaliar circuitos para checagem de incompatibilidades:', e);
+    }
+
+    // 7. Falta de Proteção IDR 30mA em Áreas Molhadas
+    (project.rooms || []).forEach(rm => {
+      const typeInfo = ROOM_TYPES[rm.type] || {};
+      if (typeInfo.wetArea) {
+        const roomPts = (project.points || []).filter(p => p.roomId === rm.id && ['tug', 'tue'].includes(p.category));
+        roomPts.forEach(pt => {
+          if (pt.circuitId && pt.circuitId !== '—') {
+            const circ = project.circuits.find(c => c.id === pt.circuitId);
+            if (circ && !circ.dr) {
+              const alreadyFlagged = items.some(it => it.id === `incomp-no-dr-${circ.id}`);
+              if (!alreadyFlagged) {
+                items.push({
+                  id: `incomp-no-dr-${circ.id}`,
+                  severity: 'warning',
+                  category: 'Proteção Diferencial Residual (IDR)',
+                  title: `Falta de IDR 30mA no Circuito ${circ.id} (${rm.name})`,
+                  description: `O circuito ${circ.id} atende tomadas em área molhada (${rm.name}), mas não possui proteção IDR 30mA obrigatória pela NBR 5410 (item 5.1.3.2.2).`,
+                  actionType: 'enable_circuit_dr',
+                  circuitId: circ.id,
+                  actionLabel: `Ativar IDR 30mA no Circuito ${circ.id}`,
+                  badge: 'Obrigatório NBR 5410'
+                });
+              }
+            }
+          }
+        });
+      }
+    });
+
+    const criticalCount = items.filter(it => it.severity === 'critical').length;
+    const warningCount = items.filter(it => it.severity === 'warning').length;
+
+    return {
+      criticalCount,
+      warningCount,
+      totalIssues: items.length,
+      items
+    };
+  }
+
   return {
     ROOM_TYPES,
     AMPACITY_TABLE_B1,
@@ -1177,7 +1416,8 @@ window.NBR5410 = (function () {
     evaluateProjectCircuits,
     calculateBoardSummary,
     autoBalancePhases,
-    generateMaterialList
+    generateMaterialList,
+    checkProjectIncompatibilities
   };
 })();
 

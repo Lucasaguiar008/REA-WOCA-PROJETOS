@@ -26,6 +26,7 @@ window.CAD2D = (function () {
   let conduitStartPointId = null;
   let dimensionStartWorld = null;
   let mouseWorldPos = { x: 0, y: 0 };
+  let activeSnapTarget = null; // { x, y, dist, type: 'corner'|'midpoint'|'edge', label, snapped }
 
   // Pilhas de Histórico (Reverter / Refazer) e Área de Transferência (Copiar / Colar)
   const MAX_HISTORY = 60;
@@ -36,7 +37,7 @@ window.CAD2D = (function () {
 
   // Arraste e Edição
   let isDragging = false;
-  let dragType = null; // 'pan' | 'point' | 'room' | 'resize_room' | 'new_room' | 'opening' | 'resize_opening' | 'text' | 'stair'
+  let dragType = null; // 'pan' | 'point' | 'room' | 'resize_room' | 'new_room' | 'opening' | 'resize_opening' | 'text' | 'stair' | 'dimension_handle' | 'dimension_move'
   let activeResizeHandle = null;
   let dragStartScreen = { x: 0, y: 0 };
   let dragStartWorld = { x: 0, y: 0 };
@@ -403,6 +404,7 @@ window.CAD2D = (function () {
     activeTool = toolName;
     conduitStartPointId = null;
     dimensionStartWorld = null;
+    activeSnapTarget = null;
     updateCursor();
     if (onToolChange) onToolChange(toolName);
     render();
@@ -425,7 +427,10 @@ window.CAD2D = (function () {
         ne: 'nesw-resize',
         sw: 'nesw-resize',
         op_start: 'ew-resize',
-        op_end: 'ew-resize'
+        op_end: 'ew-resize',
+        dim_p1: 'crosshair',
+        dim_p2: 'crosshair',
+        dim_mid: 'move'
       };
       canvas.style.cursor = cursorMap[hoveredHandle] || 'pointer';
     } else if (hoveredPointId || hoveredOpeningId) {
@@ -690,6 +695,102 @@ window.CAD2D = (function () {
     ];
   }
 
+  function getDimensionResizeHandles(dm) {
+    const s1 = worldToScreen(dm.x1, dm.y1);
+    const s2 = worldToScreen(dm.x2, dm.y2);
+    const sm = { x: (s1.x + s2.x) / 2, y: (s1.y + s2.y) / 2 };
+    return [
+      { id: 'dim_p1', x: s1.x, y: s1.y, wx: dm.x1, wy: dm.y1, label: 'Ponto 1' },
+      { id: 'dim_p2', x: s2.x, y: s2.y, wx: dm.x2, wy: dm.y2, label: 'Ponto 2' },
+      { id: 'dim_mid', x: sm.x, y: sm.y, wx: (dm.x1 + dm.x2) / 2, wy: (dm.y1 + dm.y2) / 2, label: 'Mover Cota' }
+    ];
+  }
+
+  // Snap Magnético Inteligente para Cotas (Cantos e Bordas das Paredes dos Cômodos)
+  function snapDimensionPoint(wx, wy, maxDistMeters = 0.38) {
+    if (!project || !Array.isArray(project.rooms) || project.rooms.length === 0) {
+      return { x: snap(wx, 0.05), y: snap(wy, 0.05), snapped: false };
+    }
+
+    let bestCandidate = null;
+
+    // 1. Prioridade Máxima: Cantos e Pontos Médios dos Cômodos
+    for (const room of project.rooms) {
+      const targets = [
+        { x: room.x, y: room.y, type: 'corner', label: `${room.name} (Canto)` },
+        { x: +(room.x + room.w).toFixed(2), y: room.y, type: 'corner', label: `${room.name} (Canto)` },
+        { x: room.x, y: +(room.y + room.h).toFixed(2), type: 'corner', label: `${room.name} (Canto)` },
+        { x: +(room.x + room.w).toFixed(2), y: +(room.y + room.h).toFixed(2), type: 'corner', label: `${room.name} (Canto)` },
+        { x: +(room.x + room.w / 2).toFixed(2), y: room.y, type: 'midpoint', label: `${room.name} (Meio Norte)` },
+        { x: +(room.x + room.w / 2).toFixed(2), y: +(room.y + room.h).toFixed(2), type: 'midpoint', label: `${room.name} (Meio Sul)` },
+        { x: room.x, y: +(room.y + room.h / 2).toFixed(2), type: 'midpoint', label: `${room.name} (Meio Oeste)` },
+        { x: +(room.x + room.w).toFixed(2), y: +(room.y + room.h / 2).toFixed(2), type: 'midpoint', label: `${room.name} (Meio Leste)` }
+      ];
+
+      for (const pt of targets) {
+        const d = Math.hypot(wx - pt.x, wy - pt.y);
+        if (d <= maxDistMeters && (!bestCandidate || d < bestCandidate.dist)) {
+          bestCandidate = { x: pt.x, y: pt.y, dist: d, type: pt.type, label: pt.label, snapped: true };
+        }
+      }
+    }
+
+    // Se estiver a até 0.28m de um canto/meio, conecta imediatamente nele
+    if (bestCandidate && bestCandidate.dist <= 0.28) {
+      return bestCandidate;
+    }
+
+    // 2. Prioridade Secundária: Bordas / Arestas das Paredes (Snap Perpendicular Contínuo)
+    for (const room of project.rooms) {
+      const rx1 = room.x;
+      const rx2 = +(room.x + room.w).toFixed(2);
+      const ry1 = room.y;
+      const ry2 = +(room.y + room.h).toFixed(2);
+
+      // Borda Norte (horizontal em ry1)
+      if (wx >= rx1 - 0.12 && wx <= rx2 + 0.12) {
+        const dN = Math.abs(wy - ry1);
+        if (dN <= maxDistMeters && (!bestCandidate || dN < bestCandidate.dist)) {
+          const clampedX = +(Math.max(rx1, Math.min(rx2, snap(wx, 0.05)))).toFixed(2);
+          bestCandidate = { x: clampedX, y: ry1, dist: dN, type: 'edge', label: `${room.name} (Borda)`, snapped: true };
+        }
+      }
+
+      // Borda Sul (horizontal em ry2)
+      if (wx >= rx1 - 0.12 && wx <= rx2 + 0.12) {
+        const dS = Math.abs(wy - ry2);
+        if (dS <= maxDistMeters && (!bestCandidate || dS < bestCandidate.dist)) {
+          const clampedX = +(Math.max(rx1, Math.min(rx2, snap(wx, 0.05)))).toFixed(2);
+          bestCandidate = { x: clampedX, y: ry2, dist: dS, type: 'edge', label: `${room.name} (Borda)`, snapped: true };
+        }
+      }
+
+      // Borda Oeste (vertical em rx1)
+      if (wy >= ry1 - 0.12 && wy <= ry2 + 0.12) {
+        const dW = Math.abs(wx - rx1);
+        if (dW <= maxDistMeters && (!bestCandidate || dW < bestCandidate.dist)) {
+          const clampedY = +(Math.max(ry1, Math.min(ry2, snap(wy, 0.05)))).toFixed(2);
+          bestCandidate = { x: rx1, y: clampedY, dist: dW, type: 'edge', label: `${room.name} (Borda)`, snapped: true };
+        }
+      }
+
+      // Borda Leste (vertical em rx2)
+      if (wy >= ry1 - 0.12 && wy <= ry2 + 0.12) {
+        const dE = Math.abs(wx - rx2);
+        if (dE <= maxDistMeters && (!bestCandidate || dE < bestCandidate.dist)) {
+          const clampedY = +(Math.max(ry1, Math.min(ry2, snap(wy, 0.05)))).toFixed(2);
+          bestCandidate = { x: rx2, y: clampedY, dist: dE, type: 'edge', label: `${room.name} (Borda)`, snapped: true };
+        }
+      }
+    }
+
+    if (bestCandidate) {
+      return bestCandidate;
+    }
+
+    return { x: snap(wx, 0.05), y: snap(wy, 0.05), snapped: false };
+  }
+
   function findResizeHandleAtScreen(sx, sy) {
     if (!project || !selectedItem) return null;
     if (selectedItem.kind === 'room') {
@@ -707,6 +808,15 @@ window.CAD2D = (function () {
       const handles = getOpeningResizeHandles(op);
       for (const h of handles) {
         if (Math.hypot(sx - h.x, sy - h.y) <= 11) {
+          return h.id;
+        }
+      }
+    } else if (selectedItem.kind === 'dimension') {
+      const dm = (project.dimensions || []).find(d => d.id === selectedItem.id);
+      if (!dm) return null;
+      const handles = getDimensionResizeHandles(dm);
+      for (const h of handles) {
+        if (Math.hypot(sx - h.x, sy - h.y) <= 13) {
           return h.id;
         }
       }
@@ -879,7 +989,7 @@ window.CAD2D = (function () {
     'qdc', 'quadro_parcial', 'padrao_entrada',
     'light', 'sensor_presenca',
     'switch', 'int_duplo', 'int_triplo', 'int_3way', 'int_4way', 'int_campainha',
-    'tug_baixa', 'tug_media', 'tug_dupla', 'tug_tripla', 'tue_alta',
+    'tug_baixa', 'tug_media', 'tug_dupla', 'tug_tripla', 'tue_alta', 'tomada_trifasica',
     'tomada_rede', 'tomada_telefone', 'campainha', 'camera_cftv',
     'caixa_passagem', 'conduit_sobe', 'conduit_desce'
   ];
@@ -951,7 +1061,8 @@ window.CAD2D = (function () {
 
     // 3c. Traçar Cota Manual entre 2 pontos (Item 16)
     if (activeTool === 'dimension') {
-      const ptWorld = { x: snap(world.x, 0.05), y: snap(world.y, 0.05) };
+      const snapResult = snapDimensionPoint(world.x, world.y);
+      const ptWorld = { x: snapResult.x, y: snapResult.y };
       if (!dimensionStartWorld) {
         dimensionStartWorld = ptWorld;
       } else {
@@ -969,10 +1080,11 @@ window.CAD2D = (function () {
           project.dimensions.push(newDim);
           selectedItem = { kind: 'dimension', id: newDim.id };
           dimensionStartWorld = null;
+          activeSnapTarget = null;
           setTool('select');
           onSelectionChange(selectedItem);
           notifyStateChange();
-          onProjectMutate('Cota adicionada à planta');
+          onProjectMutate('Cota conectada à planta');
         }
       }
       render();
@@ -1058,6 +1170,16 @@ window.CAD2D = (function () {
           dragInitialPos = { offset: op.offset, width: op.width };
           return;
         }
+      } else if (selectedItem.kind === 'dimension') {
+        const dm = (project.dimensions || []).find(d => d.id === selectedItem.id);
+        if (dm) {
+          pendingDragSnapshot = captureStateSnapshot();
+          isDragging = true;
+          dragType = 'dimension_handle';
+          activeResizeHandle = handle;
+          dragInitialPos = { x1: dm.x1, y1: dm.y1, x2: dm.x2, y2: dm.y2 };
+          return;
+        }
       }
     }
 
@@ -1092,7 +1214,11 @@ window.CAD2D = (function () {
     // 7c. Cota Manual
     const hitDim = findDimensionAtScreen(sx, sy);
     if (hitDim) {
+      pendingDragSnapshot = captureStateSnapshot();
       selectedItem = { kind: 'dimension', id: hitDim.id };
+      isDragging = true;
+      dragType = 'dimension_move';
+      dragInitialPos = { x1: hitDim.x1, y1: hitDim.y1, x2: hitDim.x2, y2: hitDim.y2 };
       onSelectionChange(selectedItem);
       notifyStateChange();
       render();
@@ -1251,6 +1377,15 @@ window.CAD2D = (function () {
       hoveredOpeningId = hoverOp ? hoverOp.id : null;
       const hoverRm = (!hoveredHandle && !hoverPt && !hoverOp) ? findRoomAtWorld(world.x, world.y) : null;
       hoveredRoomId = hoverRm ? hoverRm.id : null;
+
+      if (activeTool === 'dimension') {
+        const snapRes = snapDimensionPoint(world.x, world.y);
+        mouseWorldPos = { x: snapRes.x, y: snapRes.y };
+        activeSnapTarget = snapRes.snapped ? snapRes : null;
+      } else {
+        activeSnapTarget = null;
+      }
+
       updateCursor();
       render();
       return;
@@ -1398,6 +1533,44 @@ window.CAD2D = (function () {
         newRoomPreview.h = Math.max(1.2, +(y2 - y1).toFixed(2));
       }
       render();
+    } else if (dragType === 'dimension_handle' && selectedItem && selectedItem.kind === 'dimension') {
+      const dm = (project.dimensions || []).find(d => d.id === selectedItem.id);
+      if (dm) {
+        if (activeResizeHandle === 'dim_p1') {
+          const snapRes = snapDimensionPoint(world.x, world.y);
+          dm.x1 = snapRes.x;
+          dm.y1 = snapRes.y;
+          activeSnapTarget = snapRes.snapped ? snapRes : null;
+        } else if (activeResizeHandle === 'dim_p2') {
+          const snapRes = snapDimensionPoint(world.x, world.y);
+          dm.x2 = snapRes.x;
+          dm.y2 = snapRes.y;
+          activeSnapTarget = snapRes.snapped ? snapRes : null;
+        } else if (activeResizeHandle === 'dim_mid') {
+          const dx = snap(world.x - dragStartWorld.x, 0.05);
+          const dy = snap(world.y - dragStartWorld.y, 0.05);
+          dm.x1 = +(dragInitialPos.x1 + dx).toFixed(2);
+          dm.y1 = +(dragInitialPos.y1 + dy).toFixed(2);
+          dm.x2 = +(dragInitialPos.x2 + dx).toFixed(2);
+          dm.y2 = +(dragInitialPos.y2 + dy).toFixed(2);
+          activeSnapTarget = null;
+        }
+        onSelectionChange(selectedItem);
+        render();
+      }
+    } else if (dragType === 'dimension_move' && selectedItem && selectedItem.kind === 'dimension') {
+      const dm = (project.dimensions || []).find(d => d.id === selectedItem.id);
+      if (dm) {
+        const dx = snap(world.x - dragStartWorld.x, 0.05);
+        const dy = snap(world.y - dragStartWorld.y, 0.05);
+        dm.x1 = +(dragInitialPos.x1 + dx).toFixed(2);
+        dm.y1 = +(dragInitialPos.y1 + dy).toFixed(2);
+        dm.x2 = +(dragInitialPos.x2 + dx).toFixed(2);
+        dm.y2 = +(dragInitialPos.y2 + dy).toFixed(2);
+        activeSnapTarget = null;
+        onSelectionChange(selectedItem);
+        render();
+      }
     }
   }
 
@@ -1448,7 +1621,7 @@ window.CAD2D = (function () {
       onSelectionChange(selectedItem);
       notifyStateChange();
       onProjectMutate(`Ambiente "${newRoom.name}" criado com porta, janela e pontos NBR 5410!`);
-    } else if (['point', 'room', 'resize_room', 'opening', 'resize_opening', 'text', 'stair'].includes(dragType)) {
+    } else if (['point', 'room', 'resize_room', 'opening', 'resize_opening', 'text', 'stair', 'dimension_handle', 'dimension_move'].includes(dragType)) {
       const afterSnap = captureStateSnapshot();
       if (pendingDragSnapshot && afterSnap !== pendingDragSnapshot) {
         undoStack.push(pendingDragSnapshot);
@@ -1456,6 +1629,7 @@ window.CAD2D = (function () {
         redoStack = [];
       }
       pendingDragSnapshot = null;
+      activeSnapTarget = null;
       onSelectionChange(selectedItem);
       notifyStateChange();
       onProjectMutate();
@@ -1463,6 +1637,7 @@ window.CAD2D = (function () {
     isDragging = false;
     dragType = null;
     activeResizeHandle = null;
+    activeSnapTarget = null;
     updateCursor();
     render();
   }
@@ -1584,11 +1759,12 @@ window.CAD2D = (function () {
       int_3way: { category: 'switch', subtype: 'int_3way', label: 'Int. Three-Way (S3w)', z: 1.2, powerVA: 0, command: 'a1', circuitId: defaultCircuit },
       int_4way: { category: 'switch', subtype: 'int_4way', label: 'Int. Four-Way (S4w)', z: 1.2, powerVA: 0, command: 'a1', circuitId: defaultCircuit },
       int_campainha: { category: 'switch', subtype: 'int_campainha', label: 'Pulsador Campainha', z: 1.2, powerVA: 0, command: 'camp', circuitId: defaultCircuit },
-      tug_baixa: { category: 'tug', subtype: 'tug_baixa', label: 'TUG Simples 100VA', z: 0.3, powerVA: 100, circuitId: defaultCircuit },
-      tug_dupla: { category: 'tug', subtype: 'tug_dupla', label: 'Tomada Dupla (2x)', z: 0.3, powerVA: 200, circuitId: defaultCircuit },
-      tug_tripla: { category: 'tug', subtype: 'tug_tripla', label: 'Tomada Tripla (3x)', z: 0.3, powerVA: 300, circuitId: defaultCircuit },
-      tug_media: { category: 'tug', subtype: 'tug_media', label: 'TUG Média 600VA', z: 1.3, powerVA: 600, circuitId: defaultCircuit },
-      tue_alta: { category: 'tue', subtype: 'tue_alta', label: 'TUE Específica', z: 2.2, powerVA: 5500, circuitId: defaultCircuit },
+      tug_baixa: { category: 'tug', subtype: 'baixa', heightType: 'baixa', gangCount: 1, label: 'Tomada Simples (Baixa)', z: 0.3, powerVA: 100, circuitId: defaultCircuit },
+      tug_dupla: { category: 'tug', subtype: 'dupla', heightType: 'baixa', gangCount: 2, label: 'Tomada Dupla (2x)', z: 0.3, powerVA: 200, circuitId: defaultCircuit },
+      tug_tripla: { category: 'tug', subtype: 'tripla', heightType: 'baixa', gangCount: 3, label: 'Tomada Tripla (3x)', z: 0.3, powerVA: 300, circuitId: defaultCircuit },
+      tug_media: { category: 'tug', subtype: 'media', heightType: 'media', gangCount: 1, label: 'Tomada Média 600VA', z: 1.3, powerVA: 600, circuitId: defaultCircuit },
+      tue_alta: { category: 'tue', subtype: 'alta', heightType: 'alta', gangCount: 1, label: 'Tomada Alta (TUE)', z: 2.2, powerVA: 5500, circuitId: defaultCircuit },
+      tomada_trifasica: { category: 'tomada_trifasica', subtype: 'trifasica', heightType: 'media', gangCount: 1, isThreePhase: true, label: 'Tomada 3Φ (Trifásica)', z: 1.3, powerVA: 7500, circuitId: defaultCircuit },
       tomada_rede: { category: 'telecom', subtype: 'tomada_rede', label: 'Dados RJ45 Cat6', z: 0.3, powerVA: 0, circuitId: null },
       tomada_telefone: { category: 'telecom', subtype: 'tomada_telefone', label: 'Telefone RJ11', z: 0.3, powerVA: 0, circuitId: null },
       campainha: { category: 'bell', subtype: 'campainha', label: 'Campainha / Cigarra', z: 2.2, powerVA: 15, command: 'camp', circuitId: defaultCircuit },
@@ -1855,7 +2031,7 @@ window.CAD2D = (function () {
       (project.texts || []).forEach(tx => drawCustomText2D(tx));
     }
 
-    // 5. Alças de Redimensionamento do Cômodo ou Abertura Selecionada
+    // 5. Alças de Redimensionamento do Cômodo, Abertura ou Cota Selecionada
     if (selectedItem && selectedItem.kind === 'room') {
       const selRoom = project.rooms.find(r => r.id === selectedItem.id);
       if (selRoom) {
@@ -1866,6 +2042,16 @@ window.CAD2D = (function () {
       if (selOp) {
         drawOpeningSelectionHandles(selOp);
       }
+    } else if (selectedItem && selectedItem.kind === 'dimension') {
+      const selDim = (project.dimensions || []).find(d => d.id === selectedItem.id);
+      if (selDim) {
+        drawDimensionSelectionHandles(selDim);
+      }
+    }
+
+    // Indicador visual de Snap Magnético ativo
+    if (activeSnapTarget) {
+      drawSnapIndicator(activeSnapTarget);
     }
   }
 
@@ -1978,7 +2164,7 @@ window.CAD2D = (function () {
     ctx.restore();
   }
 
-  // Desenho de Cota Manual (Item 16)
+  // Desenho de Cota Manual (Item 16 - ABNT NBR 6492)
   function drawManualDimension2D(dm) {
     const s1 = worldToScreen(dm.x1, dm.y1);
     const s2 = worldToScreen(dm.x2, dm.y2);
@@ -1987,8 +2173,8 @@ window.CAD2D = (function () {
     const angle = Math.atan2(s2.y - s1.y, s2.x - s1.x);
 
     ctx.save();
-    ctx.strokeStyle = isSel ? '#fde047' : dm.isPreview ? '#38bdf8' : '#a855f7';
-    ctx.lineWidth = isSel ? 2.5 : 1.8;
+    ctx.strokeStyle = isSel ? '#f59e0b' : dm.isPreview ? '#38bdf8' : '#a855f7';
+    ctx.lineWidth = isSel ? 2.8 : 1.8;
 
     ctx.beginPath();
     ctx.moveTo(s1.x, s1.y);
@@ -2001,10 +2187,10 @@ window.CAD2D = (function () {
       ctx.translate(pt.x, pt.y);
       ctx.rotate(angle);
       ctx.beginPath();
-      ctx.moveTo(0, -9);
-      ctx.lineTo(0, 9);
-      ctx.moveTo(-6, 6);
-      ctx.lineTo(6, -6);
+      ctx.moveTo(0, -10);
+      ctx.lineTo(0, 10);
+      ctx.moveTo(-7, 7);
+      ctx.lineTo(7, -7);
       ctx.stroke();
       ctx.restore();
     });
@@ -2016,13 +2202,153 @@ window.CAD2D = (function () {
     if (txtAngle > Math.PI / 2 || txtAngle < -Math.PI / 2) txtAngle += Math.PI;
     ctx.rotate(txtAngle);
 
-    const lbl = `${distMeters.toFixed(2)} m`;
-    ctx.fillStyle = '#0f172a';
-    ctx.fillRect(-48, -26, 96, 24);
-    ctx.fillStyle = isSel ? '#fde047' : '#e9d5ff';
+    const lbl = (dm.label && dm.label.trim()) ? dm.label.trim() : `${distMeters.toFixed(2)} m`;
     ctx.font = '700 20px JetBrains Mono, monospace';
+    const textWidth = ctx.measureText(lbl).width;
+
+    ctx.fillStyle = isSel ? 'rgba(15, 23, 42, 0.95)' : 'rgba(15, 23, 42, 0.88)';
+    ctx.strokeStyle = isSel ? '#f59e0b' : '#a855f7';
+    ctx.lineWidth = isSel ? 1.8 : 1.0;
+    ctx.beginPath();
+    ctx.roundRect(-textWidth / 2 - 10, -28, textWidth + 20, 26, 4);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = isSel ? '#fde047' : '#e9d5ff';
     ctx.textAlign = 'center';
     ctx.fillText(lbl, 0, -8);
+    ctx.restore();
+  }
+
+  // Desenho de Alças de Seleção da Cota Manual
+  function drawDimensionSelectionHandles(dm) {
+    const s1 = worldToScreen(dm.x1, dm.y1);
+    const s2 = worldToScreen(dm.x2, dm.y2);
+    const sm = { x: (s1.x + s2.x) / 2, y: (s1.y + s2.y) / 2 };
+    const distMeters = Math.hypot(dm.x2 - dm.x1, dm.y2 - dm.y1);
+
+    ctx.save();
+
+    // Linha tracejada conectora
+    ctx.setLineDash([4, 4]);
+    ctx.strokeStyle = '#f59e0b';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(s1.x, s1.y);
+    ctx.lineTo(s2.x, s2.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Alça P1 (Início da cota)
+    const isHoverP1 = hoveredHandle === 'dim_p1' || activeResizeHandle === 'dim_p1';
+    ctx.fillStyle = isHoverP1 ? '#38bdf8' : '#f59e0b';
+    ctx.strokeStyle = '#0f172a';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.arc(s1.x, s1.y, isHoverP1 ? 9 : 7, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    // Alça P2 (Fim da cota)
+    const isHoverP2 = hoveredHandle === 'dim_p2' || activeResizeHandle === 'dim_p2';
+    ctx.fillStyle = isHoverP2 ? '#38bdf8' : '#f59e0b';
+    ctx.strokeStyle = '#0f172a';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.arc(s2.x, s2.y, isHoverP2 ? 9 : 7, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    // Alça Central (Mover cota inteira)
+    const isHoverMid = hoveredHandle === 'dim_mid' || activeResizeHandle === 'dim_mid';
+    ctx.fillStyle = isHoverMid ? '#38bdf8' : '#10b981';
+    ctx.strokeStyle = '#0f172a';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.roundRect(sm.x - 8, sm.y - 8, 16, 16, 4);
+    ctx.fill();
+    ctx.stroke();
+
+    // Rótulos P1 e P2 nos cantos
+    ctx.font = '700 13px Inter, sans-serif';
+    ctx.fillStyle = '#fde047';
+    ctx.textAlign = 'center';
+    ctx.fillText('P1', s1.x, s1.y - 12);
+    ctx.fillText('P2', s2.x, s2.y - 12);
+
+    // Badge explicativo
+    const badgeText = `📏 Cota: ${distMeters.toFixed(2)}m (Arraste P1 ou P2 para conectar com cantos/bordas)`;
+    ctx.font = '700 15px Inter, sans-serif';
+    const tw = ctx.measureText(badgeText).width + 24;
+    const bx = sm.x - tw / 2;
+    const by = Math.min(s1.y, s2.y) - 52;
+
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.94)';
+    ctx.strokeStyle = '#f59e0b';
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.roundRect(bx, by, tw, 32, 6);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = '#fde047';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(badgeText, bx + tw / 2, by + 16);
+
+    ctx.restore();
+  }
+
+  // Indicador Visual de Snap Magnético aos Cômodos (Estilo CAD / Revit)
+  function drawSnapIndicator(target) {
+    if (!target) return;
+    const s = worldToScreen(target.x, target.y);
+    ctx.save();
+    ctx.strokeStyle = '#06b6d4';
+    ctx.fillStyle = 'rgba(6, 182, 212, 0.28)';
+    ctx.lineWidth = 2.2;
+    ctx.beginPath();
+
+    if (target.type === 'corner') {
+      ctx.rect(s.x - 8, s.y - 8, 16, 16);
+      ctx.fill();
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, 2.5, 0, Math.PI * 2);
+      ctx.fillStyle = '#06b6d4';
+      ctx.fill();
+    } else if (target.type === 'midpoint') {
+      ctx.moveTo(s.x, s.y - 9);
+      ctx.lineTo(s.x + 9, s.y + 7);
+      ctx.lineTo(s.x - 9, s.y + 7);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    } else {
+      ctx.moveTo(s.x, s.y - 9);
+      ctx.lineTo(s.x + 9, s.y);
+      ctx.lineTo(s.x, s.y + 9);
+      ctx.lineTo(s.x - 9, s.y);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    }
+
+    const txt = `🧲 ${target.label || 'Snap na Borda'}`;
+    ctx.font = '700 13px Inter, sans-serif';
+    const tw = ctx.measureText(txt).width + 16;
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.92)';
+    ctx.strokeStyle = '#06b6d4';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.roundRect(s.x + 12, s.y - 13, tw, 26, 4);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = '#67e8f9';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(txt, s.x + 20, s.y);
     ctx.restore();
   }
 
@@ -2561,10 +2887,15 @@ window.CAD2D = (function () {
         ctx.fillText(pt.command || 'a1', 0, r + 15);
       }
     } else if (pt.category === 'switch') {
-      // Símbolos NBR 5444 de Interruptores: Simples (1S), Duplo (2S), Triplo (3S), Three-Way (S3w), Four-Way (S4w), Pulsador Campainha (Items 21 e 24)
+      // Símbolos NBR 5444 de Interruptores: Simples (1S), Duplo (2S), Triplo (3S), Three-Way (S3w), Four-Way (S4w), Pulsador Campainha
       const angle = getWallNormalAngle(pt);
       const r = 11;
-      const sub = pt.subtype || 'int_simples';
+      const rawSub = (pt.subtype || 'simples').replace(/^int_/, '');
+      const is3Way = rawSub === '3way';
+      const is4Way = rawSub === '4way';
+      const isDuplo = rawSub === 'duplo';
+      const isTriplo = rawSub === 'triplo';
+      const isCampainha = rawSub === 'campainha';
 
       ctx.save();
       ctx.rotate(angle);
@@ -2578,27 +2909,31 @@ window.CAD2D = (function () {
 
       ctx.beginPath();
       ctx.arc(0, 0, r, 0, Math.PI * 2);
-      ctx.fillStyle = sub === 'int_3way' ? '#34d399' : '#0b1120';
+      ctx.fillStyle = is3Way ? '#34d399' : '#0b1120';
       ctx.fill();
       ctx.strokeStyle = '#34d399';
       ctx.lineWidth = 2.2;
       ctx.stroke();
 
-      if (sub === 'int_4way') {
+      if (is4Way) {
         // Metade sombreada (Intermediário Four-Way NBR 5444)
         ctx.beginPath();
         ctx.arc(0, 0, r, -Math.PI / 2, Math.PI / 2);
         ctx.closePath();
         ctx.fillStyle = '#34d399';
         ctx.fill();
-      } else if (sub === 'int_duplo') {
+      } else if (isDuplo) {
         // Linha diametral (2 seções)
         ctx.beginPath();
         ctx.moveTo(-r, 0);
         ctx.lineTo(r, 0);
+        ctx.strokeStyle = '#34d399';
+        ctx.lineWidth = 2;
         ctx.stroke();
-      } else if (sub === 'int_triplo') {
+      } else if (isTriplo) {
         // 3 raios a 120° (3 seções)
+        ctx.strokeStyle = '#34d399';
+        ctx.lineWidth = 2;
         for (let a = 0; a < 3; a++) {
           const ang = (a * Math.PI * 2) / 3 - Math.PI / 2;
           ctx.beginPath();
@@ -2606,7 +2941,7 @@ window.CAD2D = (function () {
           ctx.lineTo(Math.cos(ang) * r, Math.sin(ang) * r);
           ctx.stroke();
         }
-      } else if (sub === 'int_campainha') {
+      } else if (isCampainha) {
         // Ponto concêntrico (Pulsador de Campainha)
         ctx.beginPath();
         ctx.arc(0, 0, 4, 0, Math.PI * 2);
@@ -2615,24 +2950,40 @@ window.CAD2D = (function () {
       }
 
       if (layers.labels) {
-        ctx.fillStyle = sub === 'int_3way' ? '#fef08a' : '#6ee7b7';
+        ctx.fillStyle = is3Way ? '#fef08a' : '#6ee7b7';
         ctx.font = '700 17px JetBrains Mono, monospace';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        const tag = sub === 'int_3way' ? `3w ${pt.command || 'a'}` : sub === 'int_4way' ? `4w ${pt.command || 'a'}` : (pt.command || 'a');
+        const tag = is3Way ? `3w ${pt.command || 'a'}` : is4Way ? `4w ${pt.command || 'a'}` : (pt.command || 'a');
         ctx.fillText(tag, 0, r + 15);
       }
-    } else if (pt.category === 'tug' || pt.category === 'tue') {
-      // Símbolos NBR 5444 de Tomadas: Simples, Dupla (2x), Tripla (3x), Média e Alta (Item 14)
+    } else if (pt.category === 'tug' || pt.category === 'tue' || pt.category === 'tomada_trifasica') {
+      // Símbolos NBR 5444 de Tomadas: Simples (1x), Dupla (2x), Tripla (3x), Trifásica (3Φ)
+      // Alturas NBR 5444: Baixa (vazada), Média (semi-preenchida), Alta (totalmente preenchida)
       const angle = getWallNormalAngle(pt);
-      const isHigh = pt.category === 'tue' || Number(pt.z) >= 1.9;
-      const isMid = !isHigh && (Number(pt.z) >= 1.1 || (Number(pt.powerVA) >= 600 && pt.subtype === 'tug_media'));
-      const mainColor = isHigh ? '#f43f5e' : '#38bdf8';
-      const gangCount = pt.subtype === 'tug_tripla' ? 3 : pt.subtype === 'tug_dupla' ? 2 : 1;
+      const isTriPhase = pt.category === 'tomada_trifasica' || pt.subtype === 'trifasica' || !!pt.isThreePhase;
+
+      const heightType = pt.heightType || (
+        (pt.category === 'tue' || Number(pt.z) >= 1.9 || pt.subtype === 'alta') ? 'alta' :
+        (Number(pt.z) >= 1.0 || pt.subtype === 'media' || pt.subtype === 'tug_media') ? 'media' : 'baixa'
+      );
+      const isHigh = heightType === 'alta';
+      const isMid = heightType === 'media';
+
+      let gangCount = isTriPhase ? 1 : pt.gangCount;
+      if (!gangCount) {
+        if (['tripla', 'tug_tripla', '3x'].includes(pt.subtype)) gangCount = 3;
+        else if (['dupla', 'tug_dupla', '2x'].includes(pt.subtype)) gangCount = 2;
+        else gangCount = 1;
+      }
+
+      const mainColor = isTriPhase ? '#f97316' : (isHigh ? '#f43f5e' : '#38bdf8');
+      const strokeColor = isTriPhase ? '#fb923c' : (isHigh ? '#fda4af' : '#38bdf8');
 
       ctx.save();
       ctx.rotate(angle);
 
+      // Linha de apoio na parede e haste condutora
       ctx.strokeStyle = mainColor;
       ctx.lineWidth = 2.2;
       ctx.beginPath();
@@ -2642,10 +2993,25 @@ window.CAD2D = (function () {
       ctx.lineTo(-7, 0);
       ctx.stroke();
 
+      // Se for tomada trifásica, desenha os 3 traços inclinados de fase na haste condutora (NBR 5444)
+      if (isTriPhase) {
+        ctx.strokeStyle = '#ea580c';
+        ctx.lineWidth = 1.8;
+        for (let i = -1; i <= 1; i++) {
+          const hx = -10 + i * 2.2;
+          ctx.beginPath();
+          ctx.moveTo(hx - 2, 4);
+          ctx.lineTo(hx + 2, -4);
+          ctx.stroke();
+        }
+      }
+
       const drawSingleTriangle = (offsetY, scaleTri = 1) => {
         ctx.save();
         ctx.translate(0, offsetY);
         ctx.scale(scaleTri, scaleTri);
+
+        // Fundo escuro do triângulo
         ctx.beginPath();
         ctx.moveTo(11, 0);
         ctx.lineTo(-7, -9);
@@ -2653,10 +3019,13 @@ window.CAD2D = (function () {
         ctx.closePath();
         ctx.fillStyle = '#0b1120';
         ctx.fill();
+
         if (isHigh) {
+          // Tomada Alta: 100% preenchida com a cor da categoria
           ctx.fillStyle = mainColor;
           ctx.fill();
         } else if (isMid) {
+          // Tomada Média: metade superior preenchida
           ctx.beginPath();
           ctx.moveTo(11, 0);
           ctx.lineTo(-7, -9);
@@ -2664,19 +3033,31 @@ window.CAD2D = (function () {
           ctx.closePath();
           ctx.fillStyle = mainColor;
           ctx.fill();
-        }
+        } // Se for baixa: vazada (mantém fundo escuro)
+
+        // Contorno nítido do triângulo
         ctx.beginPath();
         ctx.moveTo(11, 0);
         ctx.lineTo(-7, -9);
         ctx.lineTo(-7, 9);
         ctx.closePath();
-        ctx.strokeStyle = isHigh ? '#fda4af' : mainColor;
+        ctx.strokeStyle = strokeColor;
         ctx.lineWidth = 2.2;
         ctx.stroke();
+
+        // Se for tomada trifásica, desenha a insígnia "3Φ"
+        if (isTriPhase) {
+          ctx.fillStyle = isHigh ? '#ffffff' : '#fb923c';
+          ctx.font = '800 8.5px JetBrains Mono, monospace';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText('3Φ', 0, 0.5);
+        }
+
         ctx.restore();
       };
 
-      if (gangCount === 1) {
+      if (isTriPhase || gangCount === 1) {
         drawSingleTriangle(0, 1.1);
       } else if (gangCount === 2) {
         drawSingleTriangle(-6.5, 0.88);
@@ -2691,13 +3072,20 @@ window.CAD2D = (function () {
       if (layers.labels) {
         const vx = Math.cos(angle) * 32;
         const vy = Math.sin(angle) * 32;
-        ctx.fillStyle = isHigh ? '#fda4af' : '#bae6fd';
+        ctx.fillStyle = isTriPhase ? '#fed7aa' : (isHigh ? '#fda4af' : '#bae6fd');
         ctx.font = '700 17px JetBrains Mono, monospace';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        const multTxt = gangCount > 1 ? `${gangCount}x ` : '';
-        const pTxt = Number(pt.powerVA) > 100 && gangCount === 1 ? `${pt.powerVA}VA ` : '';
-        ctx.fillText(`${multTxt}${pTxt}${pt.circuitId || ''}`.trim(), vx, vy);
+
+        let labelText = '';
+        if (isTriPhase) {
+          labelText = `3Φ ${pt.powerVA ? pt.powerVA + 'VA ' : ''}${pt.circuitId || ''}`.trim();
+        } else {
+          const multTxt = gangCount > 1 ? `${gangCount}x ` : '';
+          const pTxt = Number(pt.powerVA) > 100 && gangCount === 1 ? `${pt.powerVA}VA ` : '';
+          labelText = `${multTxt}${pTxt}${pt.circuitId || ''}`.trim();
+        }
+        ctx.fillText(labelText, vx, vy);
       }
     } else if (pt.category === 'telecom') {
       // Tomada de Dados RJ45 / Rede e Telefone RJ11 (Item 23)
@@ -2929,6 +3317,8 @@ window.CAD2D = (function () {
     render,
     renderProjectPreviewToCanvas,
     getSelectedItem: () => selectedItem,
+    snapDimensionPoint,
+    getDimensionResizeHandles,
     isRoomsLocked: () => lockRooms,
     setLockRooms: (val) => {
       lockRooms = Boolean(val);

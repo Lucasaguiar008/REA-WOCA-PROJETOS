@@ -8,12 +8,12 @@ window.Diagrams = (function () {
     const board = window.NBR5410.calculateBoardSummary(project, evaluated);
     const partialBoards = (project.points || []).filter(p => p.category === 'qdc' && p.subtype === 'quadro_parcial');
 
-    const rowHeight = 120;
-    const topMargin = 175;
-    const bottomMargin = 230;
+    const rowHeight = 110;
+    const topMargin = 165;
+    const bottomMargin = 200;
     const width = 2320;
     const extraPartialRows = partialBoards.length;
-    const height = Math.max(920, topMargin + (evaluated.length + extraPartialRows) * rowHeight + bottomMargin);
+    const height = Math.max(900, topMargin + (evaluated.length + extraPartialRows) * rowHeight + bottomMargin);
 
     const supplyPhases =
       project.supply.system === 'Monofásico'
@@ -27,58 +27,58 @@ window.Diagrams = (function () {
       const y = topMargin + idx * rowHeight;
       const strokeColor = c.dr ? '#38bdf8' : '#f59e0b';
       const drBadge = c.dr
-        ? `<rect x="1245" y="${y - 20}" width="105" height="38" rx="6" fill="rgba(56,189,248,0.18)" stroke="#38bdf8" stroke-width="1.8"/>
-           <text x="1297" y="${y + 6}" fill="#38bdf8" font-size="19" font-weight="700" text-anchor="middle" font-family="JetBrains Mono, monospace">IDR 30mA</text>`
+        ? `<rect x="1205" y="${y - 18}" width="95" height="36" rx="5" fill="rgba(56,189,248,0.18)" stroke="#38bdf8" stroke-width="1.6"/>
+           <text x="1252" y="${y + 5}" fill="#38bdf8" font-size="12" font-weight="700" text-anchor="middle" font-family="JetBrains Mono, monospace">IDR 30mA</text>`
         : '';
 
       // Traços de condutores NBR 5444 no ramal
       const condLines = c.poles === 2
-        ? `<line x1="1010" y1="${y - 14}" x2="1010" y2="${y + 14}" stroke="#e2e8f0" stroke-width="2.5"/>
-           <line x1="1022" y1="${y - 14}" x2="1022" y2="${y + 14}" stroke="#e2e8f0" stroke-width="2.5"/>
-           <line x1="1034" y1="${y - 14}" x2="1034" y2="${y + 8}" stroke="#34d399" stroke-width="2.5"/>
-           <line x1="1028" y1="${y - 14}" x2="1040" y2="${y - 14}" stroke="#34d399" stroke-width="2.5"/>`
-        : `<line x1="1010" y1="${y - 14}" x2="1010" y2="${y + 14}" stroke="#e2e8f0" stroke-width="2.5"/>
-           <line x1="1022" y1="${y - 14}" x2="1022" y2="${y + 14}" stroke="#38bdf8" stroke-width="2.5"/>
-           <line x1="1028" y1="${y - 14}" x2="1022" y2="${y - 14}" stroke="#38bdf8" stroke-width="2.5"/>
-           <line x1="1034" y1="${y - 14}" x2="1034" y2="${y + 8}" stroke="#34d399" stroke-width="2.5"/>
-           <line x1="1028" y1="${y - 14}" x2="1040" y2="${y - 14}" stroke="#34d399" stroke-width="2.5"/>`;
+        ? `<line x1="980" y1="${y - 12}" x2="980" y2="${y + 12}" stroke="#e2e8f0" stroke-width="2"/>
+           <line x1="992" y1="${y - 12}" x2="992" y2="${y + 12}" stroke="#e2e8f0" stroke-width="2"/>
+           <line x1="1004" y1="${y - 12}" x2="1004" y2="${y + 7}" stroke="#34d399" stroke-width="2"/>
+           <line x1="998" y1="${y - 12}" x2="1010" y2="${y - 12}" stroke="#34d399" stroke-width="2"/>`
+        : `<line x1="980" y1="${y - 12}" x2="980" y2="${y + 12}" stroke="#e2e8f0" stroke-width="2"/>
+           <line x1="992" y1="${y - 12}" x2="992" y2="${y + 12}" stroke="#38bdf8" stroke-width="2"/>
+           <line x1="998" y1="${y - 12}" x2="992" y2="${y - 12}" stroke="#38bdf8" stroke-width="2"/>
+           <line x1="1004" y1="${y - 12}" x2="1004" y2="${y + 7}" stroke="#34d399" stroke-width="2"/>
+           <line x1="998" y1="${y - 12}" x2="1010" y2="${y - 12}" stroke="#34d399" stroke-width="2"/>`;
 
       const boardTag = c.boardId && c.boardId !== 'QDC-01' ? `[${c.boardId}] ` : '';
 
       circuitsSvg += `
         <!-- Derivação do Barramento para Circuito ${c.id} -->
-        <circle cx="820" cy="${y}" r="6" fill="${strokeColor}" />
-        <line x1="820" y1="${y}" x2="870" y2="${y}" stroke="${strokeColor}" stroke-width="3.5" />
+        <circle cx="810" cy="${y}" r="5" fill="${strokeColor}" />
+        <line x1="810" y1="${y}" x2="860" y2="${y}" stroke="${strokeColor}" stroke-width="3" />
 
         <!-- Símbolo Disjuntor Termomagnético DIN -->
-        <rect x="870" y="${y - 25}" width="105" height="50" rx="6" fill="#111827" stroke="${strokeColor}" stroke-width="2.5" />
-        <path d="M 888 ${y + 8} Q 922 ${y - 14} 956 ${y + 8}" fill="none" stroke="${strokeColor}" stroke-width="2.5" />
-        <text x="922" y="${y - 32}" fill="#f8fafc" font-size="21" font-weight="700" text-anchor="middle" font-family="JetBrains Mono, monospace">
+        <rect x="860" y="${y - 22}" width="95" height="44" rx="6" fill="#111827" stroke="${strokeColor}" stroke-width="2.2" />
+        <path d="M 876 ${y + 6} Q 907 ${y - 12} 938 ${y + 6}" fill="none" stroke="${strokeColor}" stroke-width="2.2" />
+        <text x="907" y="${y - 28}" fill="#f8fafc" font-size="13.5" font-weight="700" text-anchor="middle" font-family="JetBrains Mono, monospace">
           ${c.poles}P ${c.breakerA}A (${c.curve})
         </text>
 
         <!-- Linha de Saída do Circuito c/ Seção do Cabo e Dimensionamento do Eletroduto -->
-        <line x1="975" y1="${y}" x2="1360" y2="${y}" stroke="#64748b" stroke-width="3" />
+        <line x1="955" y1="${y}" x2="1320" y2="${y}" stroke="#64748b" stroke-width="2.6" />
         ${condLines}
-        <rect x="1055" y="${y - 42}" width="180" height="32" rx="5" fill="#0f172a" stroke="#475569" stroke-width="1.5" />
-        <text x="1145" y="${y - 20}" fill="#fde68a" font-size="20" font-weight="700" text-anchor="middle" font-family="JetBrains Mono, monospace">
+        <rect x="1025" y="${y - 32}" width="130" height="25" rx="5" fill="#0f172a" stroke="#475569" stroke-width="1.3" />
+        <text x="1090" y="${y - 15}" fill="#fde68a" font-size="12.5" font-weight="700" text-anchor="middle" font-family="JetBrains Mono, monospace">
           ${c.conductorCount}x#${c.sectionMm2}mm²
         </text>
 
         <!-- Símbolo Eletroduto Dimensionado no Diagrama -->
-        <circle cx="1068" cy="${y + 24}" r="9" fill="none" stroke="#38bdf8" stroke-width="2.2" />
-        <line x1="1060" y1="${y + 32}" x2="1076" y2="${y + 16}" stroke="#38bdf8" stroke-width="2" />
-        <text x="1170" y="${y + 29}" fill="#7dd3fc" font-size="19" font-weight="700" text-anchor="middle" font-family="JetBrains Mono, monospace">
+        <circle cx="1038" cy="${y + 19}" r="7.5" fill="none" stroke="#38bdf8" stroke-width="1.8" />
+        <line x1="1032" y1="${y + 25}" x2="1044" y2="${y + 13}" stroke="#38bdf8" stroke-width="1.8" />
+        <text x="1115" y="${y + 23}" fill="#7dd3fc" font-size="12" font-weight="700" text-anchor="middle" font-family="JetBrains Mono, monospace">
           Ø${c.conduitMm}mm (${c.conduitInch}) • ${c.conduitOccupancyPct}%
         </text>
         ${drBadge}
 
         <!-- Bloco Descritivo do Circuito -->
-        <rect x="1360" y="${y - 38}" width="910" height="76" rx="8" fill="#111827" stroke="#334155" stroke-width="1.8" />
-        <text x="1380" y="${y - 8}" fill="#fbbf24" font-size="23" font-weight="700" font-family="Inter, sans-serif">
+        <rect x="1320" y="${y - 34}" width="965" height="68" rx="8" fill="#111827" stroke="#334155" stroke-width="1.8" />
+        <text x="1340" y="${y - 10}" fill="#fbbf24" font-size="16" font-weight="700" font-family="Inter, sans-serif">
           ${boardTag}${c.id} — ${c.name} (Fase ${c.phase})
         </text>
-        <text x="1380" y="${y + 24}" fill="#cbd5e1" font-size="19.6" font-family="JetBrains Mono, monospace">
+        <text x="1340" y="${y + 18}" fill="#cbd5e1" font-size="13" font-family="JetBrains Mono, monospace">
           P=${c.totalVA}VA (${c.totalW}W) | Ib=${c.ib}A | Iz=${c.izReal}A | Cabo #${c.sectionMm2}mm² | Eletroduto Ø${c.conduitMm}mm | ΔV=${c.voltageDropPercent}%
         </text>
       `;
@@ -88,101 +88,101 @@ window.Diagrams = (function () {
     partialBoards.forEach((pb, pIdx) => {
       const y = topMargin + (evaluated.length + pIdx) * rowHeight;
       circuitsSvg += `
-        <circle cx="820" cy="${y}" r="8" fill="#a855f7" />
-        <line x1="820" y1="${y}" x2="870" y2="${y}" stroke="#a855f7" stroke-width="4" />
-        <rect x="870" y="${y - 25}" width="105" height="50" rx="6" fill="#111827" stroke="#a855f7" stroke-width="2.5" />
-        <text x="922" y="${y + 8}" fill="#e9d5ff" font-size="20" font-weight="700" text-anchor="middle" font-family="JetBrains Mono, monospace">DJ 32A</text>
-        <line x1="975" y1="${y}" x2="1360" y2="${y}" stroke="#a855f7" stroke-width="3.5" stroke-dasharray="10 5" />
-        <text x="1165" y="${y - 14}" fill="#e9d5ff" font-size="20" font-weight="700" text-anchor="middle" font-family="JetBrains Mono, monospace">Alimentador #6mm² • Ø25mm (1")</text>
-        <rect x="1360" y="${y - 36}" width="910" height="72" rx="8" fill="rgba(168,85,247,0.12)" stroke="#a855f7" stroke-width="2" />
-        <text x="1380" y="${y - 6}" fill="#e9d5ff" font-size="23" font-weight="800" font-family="Inter, sans-serif">
+        <circle cx="810" cy="${y}" r="7" fill="#a855f7" />
+        <line x1="810" y1="${y}" x2="860" y2="${y}" stroke="#a855f7" stroke-width="3.5" />
+        <rect x="860" y="${y - 22}" width="95" height="44" rx="6" fill="#111827" stroke="#a855f7" stroke-width="2.2" />
+        <text x="907" y="${y + 6}" fill="#e9d5ff" font-size="13.5" font-weight="700" text-anchor="middle" font-family="JetBrains Mono, monospace">DJ 32A</text>
+        <line x1="955" y1="${y}" x2="1320" y2="${y}" stroke="#a855f7" stroke-width="3" stroke-dasharray="8 4" />
+        <text x="1135" y="${y - 12}" fill="#e9d5ff" font-size="12.5" font-weight="700" text-anchor="middle" font-family="JetBrains Mono, monospace">Alimentador #6mm² • Ø25mm (1")</text>
+        <rect x="1320" y="${y - 34}" width="965" height="68" rx="8" fill="rgba(168,85,247,0.12)" stroke="#a855f7" stroke-width="2" />
+        <text x="1340" y="${y - 10}" fill="#e9d5ff" font-size="16" font-weight="800" font-family="Inter, sans-serif">
           QUADRO PARCIAL DERIVADO: ${pb.label || 'QD-02'}
         </text>
-        <text x="1380" y="${y + 24}" fill="#cbd5e1" font-size="19.6" font-family="JetBrains Mono, monospace">
+        <text x="1340" y="${y + 18}" fill="#cbd5e1" font-size="13" font-family="JetBrains Mono, monospace">
           Sub-Quadro de Distribuição Parcial interligado ao Barramento Principal
         </text>
       `;
     });
 
     const totalRows = Math.max(1, evaluated.length + partialBoards.length);
-    const busTop = topMargin - 40;
-    const busBottom = topMargin + (totalRows - 1) * rowHeight + 40;
+    const busTop = topMargin - 35;
+    const busBottom = topMargin + (totalRows - 1) * rowHeight + 35;
     const midY = Math.round((busTop + busBottom) / 2);
 
     return `
-      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="100%" height="${height}" style="max-width:${width}px;background:#070b14;border-radius:8px;">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="100%" height="auto" style="min-width:1100px; max-width:${width}px; background:#070b14; border-radius:8px;">
         <!-- Moldura Técnica ABNT -->
         <rect x="14" y="14" width="${width - 28}" height="${height - 28}" fill="none" stroke="#475569" stroke-width="3" />
         <rect x="22" y="22" width="${width - 44}" height="${height - 44}" fill="none" stroke="#334155" stroke-width="1.8" />
 
         <!-- Cabeçalho do Diagrama Unifilar -->
-        <text x="40" y="60" fill="#f8fafc" font-size="31" font-weight="800" font-family="Inter, sans-serif">
+        <text x="40" y="52" fill="#f8fafc" font-size="20" font-weight="800" font-family="Inter, sans-serif">
           DIAGRAMA UNIFILAR GERAL E PADRÃO DE ENTRADA — ${project.name.toUpperCase()}
         </text>
-        <text x="40" y="98" fill="#94a3b8" font-size="22" font-family="JetBrains Mono, monospace">
+        <text x="40" y="80" fill="#94a3b8" font-size="13.5" font-family="JetBrains Mono, monospace">
           Concessionária: ${project.supply.concessionaria} | Padrão: ${board.entrance.categoryCode} (${board.entrance.entranceType}) | Sistema: ${project.supply.system} (${project.supply.phaseVoltage}/${project.supply.lineVoltage}V) | Demanda: ${board.demandKVA} kVA
         </text>
-        <text x="40" y="132" fill="#38bdf8" font-size="21" font-family="JetBrains Mono, monospace">
+        <text x="40" y="105" fill="#38bdf8" font-size="13" font-family="JetBrains Mono, monospace">
           Ramal Principal: #${board.mainCableMm2}mm² Cu (750V) em Eletroduto Ø${board.mainConduitMm}mm | Aterramento: ${board.entrance.groundRodsCount} Hastes Copperweld 5/8"x2,40m
         </text>
 
         <!-- Padrão de Entrada da Concessionária (Poste + Medidor kWh + DJ Padrão) -->
-        <rect x="40" y="${midY - 95}" width="260" height="190" rx="8" fill="#111827" stroke="#f59e0b" stroke-width="2.5" />
-        <text x="170" y="${midY - 62}" fill="#f59e0b" font-size="20" font-weight="800" text-anchor="middle" font-family="Inter, sans-serif">PADRÃO DE ENTRADA</text>
-        <circle cx="170" cy="${midY - 20}" r="24" fill="#0f172a" stroke="#fbbf24" stroke-width="2.5" />
-        <text x="170" y="${midY - 12}" fill="#fde68a" font-size="19" font-weight="800" text-anchor="middle" font-family="JetBrains Mono, monospace">kWh</text>
-        <text x="170" y="${midY + 28}" fill="#e2e8f0" font-size="19" font-weight="700" text-anchor="middle" font-family="JetBrains Mono, monospace">${board.entrance.categoryCode} (${supplyPhases})</text>
-        <text x="170" y="${midY + 54}" fill="#94a3b8" font-size="18" text-anchor="middle" font-family="JetBrains Mono, monospace">Cabo #${board.entrance.ramalSectionMm2}mm²</text>
-        <text x="170" y="${midY + 78}" fill="#38bdf8" font-size="18" font-weight="700" text-anchor="middle" font-family="JetBrains Mono, monospace">Eletroduto Ø${board.entrance.conduitMm}mm</text>
+        <rect x="40" y="${midY - 95}" width="250" height="190" rx="8" fill="#111827" stroke="#f59e0b" stroke-width="2.2" />
+        <text x="165" y="${midY - 66}" fill="#f59e0b" font-size="14" font-weight="800" text-anchor="middle" font-family="Inter, sans-serif">PADRÃO DE ENTRADA</text>
+        <circle cx="165" cy="${midY - 26}" r="22" fill="#0f172a" stroke="#fbbf24" stroke-width="2.2" />
+        <text x="165" y="${midY - 20}" fill="#fde68a" font-size="13.5" font-weight="800" text-anchor="middle" font-family="JetBrains Mono, monospace">kWh</text>
+        <text x="165" y="${midY + 22}" fill="#e2e8f0" font-size="13" font-weight="700" text-anchor="middle" font-family="JetBrains Mono, monospace">${board.entrance.categoryCode} (${supplyPhases})</text>
+        <text x="165" y="${midY + 46}" fill="#94a3b8" font-size="12.5" text-anchor="middle" font-family="JetBrains Mono, monospace">Cabo #${board.entrance.ramalSectionMm2}mm²</text>
+        <text x="165" y="${midY + 70}" fill="#38bdf8" font-size="12.5" font-weight="700" text-anchor="middle" font-family="JetBrains Mono, monospace">Eletroduto Ø${board.entrance.conduitMm}mm</text>
 
         <!-- Ramal Alimentador Medidor -> QDC -->
-        <line x1="300" y1="${midY}" x2="390" y2="${midY}" stroke="#f59e0b" stroke-width="4" />
-        <text x="345" y="${midY - 16}" fill="#fde68a" font-size="18" font-weight="700" text-anchor="middle" font-family="JetBrains Mono, monospace">#${board.mainCableMm2}mm²</text>
-        <text x="345" y="${midY + 24}" fill="#38bdf8" font-size="17" text-anchor="middle" font-family="JetBrains Mono, monospace">Ø${board.mainConduitMm}mm</text>
+        <line x1="290" y1="${midY}" x2="385" y2="${midY}" stroke="#f59e0b" stroke-width="3.5" />
+        <text x="337" y="${midY - 12}" fill="#fde68a" font-size="12.5" font-weight="700" text-anchor="middle" font-family="JetBrains Mono, monospace">#${board.mainCableMm2}mm²</text>
+        <text x="337" y="${midY + 20}" fill="#38bdf8" font-size="12" text-anchor="middle" font-family="JetBrains Mono, monospace">Ø${board.mainConduitMm}mm</text>
 
         <!-- Disjuntor Geral DIN -->
-        <rect x="390" y="${midY - 42}" width="145" height="84" rx="8" fill="#111827" stroke="#f59e0b" stroke-width="2.5" />
-        <text x="462" y="${midY - 8}" fill="#fbbf24" font-size="21" font-weight="700" text-anchor="middle" font-family="JetBrains Mono, monospace">DJ GERAL</text>
-        <text x="462" y="${midY + 24}" fill="#f8fafc" font-size="21" font-weight="700" text-anchor="middle" font-family="JetBrains Mono, monospace">${board.mainBreakerA}A Curva C</text>
+        <rect x="385" y="${midY - 38}" width="140" height="76" rx="8" fill="#111827" stroke="#f59e0b" stroke-width="2.2" />
+        <text x="455" y="${midY - 10}" fill="#fbbf24" font-size="14" font-weight="700" text-anchor="middle" font-family="JetBrains Mono, monospace">DJ GERAL</text>
+        <text x="455" y="${midY + 16}" fill="#f8fafc" font-size="13.5" font-weight="700" text-anchor="middle" font-family="JetBrains Mono, monospace">${board.mainBreakerA}A Curva C</text>
 
-        <line x1="535" y1="${midY}" x2="600" y2="${midY}" stroke="#f59e0b" stroke-width="4" />
+        <line x1="525" y1="${midY}" x2="590" y2="${midY}" stroke="#f59e0b" stroke-width="3.5" />
 
         <!-- IDR Geral + DPS Classe II -->
-        <rect x="600" y="${midY - 42}" width="165" height="84" rx="8" fill="#111827" stroke="#38bdf8" stroke-width="2.5" />
-        <text x="682" y="${midY - 8}" fill="#38bdf8" font-size="21" font-weight="700" text-anchor="middle" font-family="JetBrains Mono, monospace">IDR ${board.idrMainA}A</text>
-        <text x="682" y="${midY + 24}" fill="#bae6fd" font-size="19" text-anchor="middle" font-family="JetBrains Mono, monospace">30mA + DPS</text>
+        <rect x="590" y="${midY - 38}" width="155" height="76" rx="8" fill="#111827" stroke="#38bdf8" stroke-width="2.2" />
+        <text x="667" y="${midY - 10}" fill="#38bdf8" font-size="14" font-weight="700" text-anchor="middle" font-family="JetBrains Mono, monospace">IDR ${board.idrMainA}A</text>
+        <text x="667" y="${midY + 16}" fill="#bae6fd" font-size="12.5" text-anchor="middle" font-family="JetBrains Mono, monospace">30mA + DPS</text>
 
         <!-- Derivação DPS + Aterramento TN-S -->
-        <line x1="568" y1="${midY}" x2="568" y2="${midY + 110}" stroke="#34d399" stroke-width="3" stroke-dasharray="6 4" />
-        <rect x="498" y="${midY + 110}" width="140" height="64" rx="6" fill="#111827" stroke="#34d399" stroke-width="2" />
-        <text x="568" y="${midY + 137}" fill="#34d399" font-size="19" font-weight="700" text-anchor="middle" font-family="JetBrains Mono, monospace">DPS 20kA</text>
-        <text x="568" y="${midY + 160}" fill="#6ee7b7" font-size="17" text-anchor="middle" font-family="JetBrains Mono, monospace">275V Cl.II</text>
+        <line x1="558" y1="${midY}" x2="558" y2="${midY + 95}" stroke="#34d399" stroke-width="2.6" stroke-dasharray="6 4" />
+        <rect x="495" y="${midY + 95}" width="126" height="58" rx="6" fill="#111827" stroke="#34d399" stroke-width="1.8" />
+        <text x="558" y="${midY + 120}" fill="#34d399" font-size="13" font-weight="700" text-anchor="middle" font-family="JetBrains Mono, monospace">DPS 20kA</text>
+        <text x="558" y="${midY + 140}" fill="#6ee7b7" font-size="11.5" text-anchor="middle" font-family="JetBrains Mono, monospace">275V Cl.II</text>
         <!-- Símbolo Terra -->
-        <line x1="568" y1="${midY + 174}" x2="568" y2="${midY + 200}" stroke="#34d399" stroke-width="3" />
-        <line x1="538" y1="${midY + 200}" x2="598" y2="${midY + 200}" stroke="#34d399" stroke-width="3.5" />
-        <line x1="548" y1="${midY + 208}" x2="588" y2="${midY + 208}" stroke="#34d399" stroke-width="3" />
-        <line x1="558" y1="${midY + 216}" x2="578" y2="${midY + 216}" stroke="#34d399" stroke-width="2.5" />
+        <line x1="558" y1="${midY + 153}" x2="558" y2="${midY + 175}" stroke="#34d399" stroke-width="2.6" />
+        <line x1="535" y1="${midY + 175}" x2="581" y2="${midY + 175}" stroke="#34d399" stroke-width="3" />
+        <line x1="543" y1="${midY + 182}" x2="573" y2="${midY + 182}" stroke="#34d399" stroke-width="2.5" />
+        <line x1="551" y1="${midY + 189}" x2="565" y2="${midY + 189}" stroke="#34d399" stroke-width="2" />
 
         <!-- Ligação ao Barramento Principal do QDC -->
-        <line x1="765" y1="${midY}" x2="820" y2="${midY}" stroke="#f59e0b" stroke-width="4" />
-        <line x1="820" y1="${busTop}" x2="820" y2="${busBottom}" stroke="#f59e0b" stroke-width="6" />
-        <text x="820" y="${busTop - 14}" fill="#fbbf24" font-size="21" font-weight="700" text-anchor="middle" font-family="JetBrains Mono, monospace">BARRAMENTO QDC-01</text>
+        <line x1="745" y1="${midY}" x2="810" y2="${midY}" stroke="#f59e0b" stroke-width="3.5" />
+        <line x1="810" y1="${busTop}" x2="810" y2="${busBottom}" stroke="#f59e0b" stroke-width="5" />
+        <text x="810" y="${busTop - 12}" fill="#fbbf24" font-size="13.5" font-weight="700" text-anchor="middle" font-family="JetBrains Mono, monospace">BARRAMENTO QDC-01</text>
 
         <!-- Circuitos Terminais -->
         ${circuitsSvg}
 
         <!-- Carimbo Técnico ABNT — LUCAS AGUIAR -->
-        <g transform="translate(${width - 850}, ${height - 180})">
-          <rect x="0" y="0" width="810" height="148" rx="8" fill="#0f172a" stroke="#f59e0b" stroke-width="2.5" />
-          <line x1="280" y1="0" x2="280" y2="148" stroke="#334155" stroke-width="2" />
-          <text x="24" y="48" fill="#f59e0b" font-size="26" font-weight="800" font-family="Inter, sans-serif">LUCAS AGUIAR</text>
-          <text x="24" y="84" fill="#cbd5e1" font-size="19" font-weight="600" font-family="Inter, sans-serif">PROJETOS ELÉTRICOS</text>
-          <text x="24" y="118" fill="#64748b" font-size="17" font-family="JetBrains Mono, monospace">ABNT NBR 5410 / 5444</text>
+        <g transform="translate(${width - 850}, ${height - 165})">
+          <rect x="0" y="0" width="820" height="135" rx="8" fill="#0f172a" stroke="#f59e0b" stroke-width="2.2" />
+          <line x1="260" y1="0" x2="260" y2="135" stroke="#334155" stroke-width="1.8" />
+          <text x="20" y="42" fill="#f59e0b" font-size="19" font-weight="800" font-family="Inter, sans-serif">LUCAS AGUIAR</text>
+          <text x="20" y="74" fill="#cbd5e1" font-size="14" font-weight="600" font-family="Inter, sans-serif">PROJETOS ELÉTRICOS</text>
+          <text x="20" y="104" fill="#64748b" font-size="12" font-family="JetBrains Mono, monospace">ABNT NBR 5410 / 5444</text>
 
-          <text x="300" y="38" fill="#f8fafc" font-size="21" font-weight="700" font-family="Inter, sans-serif">Projeto: ${project.name}</text>
-          <text x="300" y="70" fill="#cbd5e1" font-size="19" font-family="Inter, sans-serif">Cliente: ${project.client}</text>
-          <text x="300" y="100" fill="#94a3b8" font-size="19" font-family="JetBrains Mono, monospace">Pot. Instalada: ${board.totalInstalledVA} VA | Demanda: ${board.demandVA} VA</text>
-          <text x="300" y="128" fill="#38bdf8" font-size="18" font-family="JetBrains Mono, monospace">Resp. Técnico: Lucas Aguiar | Data: ${project.updatedAt}</text>
+          <text x="280" y="32" fill="#f8fafc" font-size="13.5" font-weight="700" font-family="Inter, sans-serif">Projeto: ${project.name}</text>
+          <text x="280" y="58" fill="#cbd5e1" font-size="13" font-family="Inter, sans-serif">Cliente: ${project.client}</text>
+          <text x="280" y="84" fill="#94a3b8" font-size="12.5" font-family="JetBrains Mono, monospace">Pot. Instalada: ${board.totalInstalledVA} VA | Demanda: ${board.demandVA} VA</text>
+          <text x="280" y="108" fill="#38bdf8" font-size="12.5" font-family="JetBrains Mono, monospace">Resp. Técnico: Lucas Aguiar | Data: ${project.updatedAt}</text>
         </g>
       </svg>
     `;

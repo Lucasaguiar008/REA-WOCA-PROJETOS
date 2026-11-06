@@ -266,6 +266,15 @@
 
         <div class="header-separator"></div>
 
+        <!-- Botão Verificar Incompatibilidades NBR 5410 -->
+        <button id="btnCheckIncompatibilities" class="header-pill-btn btn-incomp" onclick="App.openIncompatibilitiesModal()" title="Verificar Incompatibilidades Técnicas e Normativas (NBR 5410)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          <span>Incompatibilidades</span>
+          <span id="badgeIncompCount" class="incomp-badge-pill" style="display:none;">0</span>
+        </button>
+
+        <div class="header-separator"></div>
+
         <!-- Exportações (DXF e JSON) -->
         <button class="header-pill-btn btn-dxf" onclick="App.exportCurrentProjectDXF()" title="Exportar Planta Elétrica em formato AutoCAD .DXF">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
@@ -293,6 +302,10 @@
             <button class="btn btn-primary btn-block btn-sm" onclick="App.runAutoGenerateNormative()" style="margin-bottom:6px;">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
               Lançamento Automático <br> NBR 5410
+            </button>
+            <button class="btn btn-secondary btn-block btn-sm" onclick="App.openIncompatibilitiesModal()" style="margin-bottom:6px;" title="Verificar se há tomadas trifásicas em monofásico, sobrecargas ou incompatibilidades">
+              <svg viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+              Verificar Incompatibilidades
             </button>
             <input type="file" id="floorplanFileInput" accept=".png,.jpg,.jpeg,.svg,.dxf" style="display:none" />
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-bottom:6px;">
@@ -510,12 +523,20 @@
                 </svg>
                 Tomada Média
               </button>
-              <button class="tool-btn" data-tool="tue_alta" style="grid-column: 1 / -1;" onclick="App.selectCadTool('tue_alta', this)" title="Tomada de Uso Específico TUE / Alta (2.20m)">
+              <button class="tool-btn" data-tool="tue_alta" onclick="App.selectCadTool('tue_alta', this)" title="Tomada de Uso Específico TUE / Alta (2.20m) - Preenchida">
                 <svg viewBox="0 0 28 22" fill="none">
                   <line x1="3" y1="4" x2="3" y2="18" stroke="#f43f5e" stroke-width="2"/>
                   <polygon points="22,11 8,4 8,18" stroke="#fda4af" stroke-width="2" fill="#f43f5e"/>
                 </svg>
-                Tomada TUE / Alta (Chuveiro, Ar-Cond., Torneira)
+                Tomada Alta (TUE)
+              </button>
+              <button class="tool-btn" data-tool="tomada_trifasica" onclick="App.selectCadTool('tomada_trifasica', this)" title="Tomada Trifásica Industrial (3Φ / 3P+T - NBR 5410/5444)">
+                <svg viewBox="0 0 28 22" fill="none">
+                  <line x1="3" y1="4" x2="3" y2="18" stroke="#f97316" stroke-width="2"/>
+                  <polygon points="22,11 8,4 8,18" stroke="#f97316" stroke-width="2" fill="#0b1120"/>
+                  <text x="15" y="14" fill="#fb923c" font-size="7.5" font-family="monospace" font-weight="900" text-anchor="middle">3Φ</text>
+                </svg>
+                Tomada Trifásica (3Φ)
               </button>
             </div>
           </div>
@@ -991,6 +1012,10 @@
               <p>Esquema unifilar completo com Padrão da Concessionária, Seção dos Cabos, Diâmetro dos Eletrodutos, Disjuntor Geral, IDR 30mA e DPS Classe II.</p>
             </div>
             <div style="display:flex; gap:10px; flex-wrap:wrap;" class="no-print">
+              <button class="btn btn-secondary" onclick="App.openIncompatibilitiesModal()" style="border-color:#f59e0b; color:#f59e0b;" title="Verificar se há tomadas trifásicas em monofásico ou violações NBR 5410">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" style="width:14px;height:14px;margin-right:4px;"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                Verificar Incompatibilidades
+              </button>
               <button class="btn btn-secondary" onclick="App.runAutoBalancePhases()">Equilibrar Fases</button>
               <button class="btn btn-accent" onclick="App.exportCurrentProjectDXF()">Exportar Planta (.DXF)</button>
               <button class="btn btn-accent" onclick="App.downloadUnifilarSVG()">Baixar Unifilar (.SVG)</button>
@@ -1313,6 +1338,34 @@
           <button type="submit" class="btn btn-primary">Criar Projeto</button>
         </div>
       </form>
+    </div>
+  </div>
+
+  <!-- ==================== MODAL DE INCOMPATIBILIDADES & CONFORMIDADE NBR 5410 ==================== -->
+  <div id="incompatibilitiesModal" class="modal-backdrop">
+    <div class="modal-dialog" style="max-width:760px;">
+      <div class="modal-header">
+        <div style="display:flex; align-items:center; gap:9px;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2.2" style="width:22px; height:22px;"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          <h3 style="margin:0; font-size:16px;">Auditoria de Incompatibilidades &amp; NBR 5410</h3>
+        </div>
+        <button class="btn btn-secondary btn-sm" onclick="App.closeIncompatibilitiesModal()">✕</button>
+      </div>
+      <div class="modal-body">
+        <div id="incompSummaryContainer" class="incomp-summary-grid"></div>
+        <div id="incompListContainer" class="incomp-list"></div>
+      </div>
+      <div class="modal-footer" style="display:flex; justify-content:space-between; align-items:center;">
+        <span style="font-size:12px; color:var(--text-muted);">Verificação em tempo real: Fornecimento, Cargas Trifásicas, Coordenação e NBR 5410</span>
+        <div style="display:flex; gap:8px;">
+          <button class="btn btn-secondary btn-sm" onclick="App.recheckIncompatibilities()">
+            🔄 Revalidar
+          </button>
+          <button class="btn btn-primary btn-sm" onclick="App.closeIncompatibilitiesModal()">
+            Fechar
+          </button>
+        </div>
+      </div>
     </div>
   </div>
 

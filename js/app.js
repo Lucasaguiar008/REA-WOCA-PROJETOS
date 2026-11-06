@@ -176,11 +176,7 @@ window.App = (function () {
         onProjectMutate: (msg) => {
           if (currentProject) {
             currentProject.updatedAt = new Date().toLocaleDateString('pt-BR');
-            saveProjectsToStorage();
-            updateEditorHeaderStats();
-            renderSidebarRoomList();
-            populate3DRoomFilterDropdown();
-            updateRemoveFloorplanBtnState();
+            syncAllScreens({ skip2D: true });
             if (msg) showToast(msg);
           }
         }
@@ -483,6 +479,239 @@ window.App = (function () {
     if (subEl) {
       subEl.textContent = `${currentProject.supply.system} ${currentProject.supply.phaseVoltage}/${currentProject.supply.lineVoltage}V • ${(currentProject.rooms || []).length} Ambientes • ${(currentProject.points || []).length} Pontos • Demanda: ${board.demandKVA} kVA`;
     }
+    updateIncompatibilitiesBadge();
+  }
+
+  // ==================== SINCRONIZAÇÃO COMPLETA DE TODAS AS TELAS ====================
+  function syncAllScreens(options = {}) {
+    if (!currentProject) return;
+
+    // 1. Salva projeto no LocalStorage
+    saveProjectsToStorage();
+
+    // 2. Atualiza cabeçalho e estatísticas do projeto
+    updateEditorHeaderStats();
+
+    // 3. Atualiza estado do botão de remover planta
+    updateRemoveFloorplanBtnState();
+
+    // 4. Sincroniza modelo e dados com o motor 3D e Quadro 3D
+    if (window.Viewer3D) {
+      window.Viewer3D.setProject(currentProject);
+    }
+
+    // 5. Atualiza elementos auxiliares da interface
+    renderSidebarRoomList();
+    populate3DRoomFilterDropdown();
+
+    // 6. Atualiza a tela ativa no momento
+    const activeTab = document.querySelector('.editor-tab.active')?.dataset.tab || 'tab2d';
+    if (activeTab === 'tab2d') {
+      if (!options.skip2D && window.CAD2D && window.CAD2D.render) {
+        window.CAD2D.render();
+      }
+    } else if (activeTab === 'tab3d') {
+      if (window.Viewer3D && window.Viewer3D.render) {
+        window.Viewer3D.render();
+      }
+    } else if (activeTab === 'tabBoard3d') {
+      if (window.Viewer3D) {
+        if (window.Viewer3D.resizeBoard3D) window.Viewer3D.resizeBoard3D();
+        if (window.Viewer3D.renderBoard3D) window.Viewer3D.renderBoard3D();
+      }
+    } else if (activeTab === 'tabRooms') {
+      renderRoomsPanel();
+    } else if (activeTab === 'tabCircuits') {
+      renderCircuitsPanel();
+    } else if (activeTab === 'tabBoard') {
+      renderBoardAndUnifilarPanel();
+    } else if (activeTab === 'tabMaterials') {
+      renderMaterialsPanel();
+    } else if (activeTab === 'tabPrint') {
+      renderPrintPreviewSheets();
+    }
+  }
+
+  // ==================== VERIFICADOR DE INCOMPATIBILIDADES NBR 5410 ====================
+  function updateIncompatibilitiesBadge() {
+    if (!currentProject || !window.NBR5410 || !window.NBR5410.checkProjectIncompatibilities) return;
+    const diag = window.NBR5410.checkProjectIncompatibilities(currentProject);
+    const btn = document.getElementById('btnCheckIncompatibilities');
+    const badge = document.getElementById('badgeIncompCount');
+
+    if (!btn || !badge) return;
+
+    btn.classList.remove('has-critical', 'is-clean');
+    badge.classList.remove('warning', 'clean');
+
+    if (diag.criticalCount > 0) {
+      btn.classList.add('has-critical');
+      badge.textContent = `${diag.criticalCount}`;
+      badge.style.display = 'inline-flex';
+      btn.title = `Atenção: ${diag.criticalCount} incompatibilidade(s) crítica(s) detectada(s) (Ex: Tomada trifásica em rede monofásica)! Clique para ver.`;
+    } else if (diag.warningCount > 0) {
+      badge.classList.add('warning');
+      badge.textContent = `${diag.warningCount}`;
+      badge.style.display = 'inline-flex';
+      btn.title = `${diag.warningCount} aviso(s) normativo(s) da NBR 5410. Clique para inspecionar.`;
+    } else {
+      btn.classList.add('is-clean');
+      badge.classList.add('clean');
+      badge.textContent = '✓';
+      badge.style.display = 'inline-flex';
+      btn.title = 'Nenhuma incompatibilidade detectada! Projeto em total conformidade NBR 5410.';
+    }
+  }
+
+  function renderIncompatibilitiesModalContent() {
+    if (!currentProject || !window.NBR5410 || !window.NBR5410.checkProjectIncompatibilities) return;
+    const diag = window.NBR5410.checkProjectIncompatibilities(currentProject);
+    const summaryBox = document.getElementById('incompSummaryContainer');
+    const listBox = document.getElementById('incompListContainer');
+
+    if (summaryBox) {
+      summaryBox.innerHTML = `
+        <div class="incomp-stat-card ${diag.criticalCount > 0 ? 'critical' : 'clean'}">
+          <span class="incomp-stat-number">${diag.criticalCount}</span>
+          <span class="incomp-stat-title">Incompatibilidades Críticas</span>
+        </div>
+        <div class="incomp-stat-card ${diag.warningCount > 0 ? 'warning' : 'clean'}">
+          <span class="incomp-stat-number">${diag.warningCount}</span>
+          <span class="incomp-stat-title">Alertas / Violações NBR</span>
+        </div>
+        <div class="incomp-stat-card clean">
+          <span class="incomp-stat-number" style="font-size:15px; margin-top:4px;">${currentProject.supply.system}</span>
+          <span class="incomp-stat-title">${currentProject.supply.concessionaria} • ${currentProject.supply.phaseVoltage}/${currentProject.supply.lineVoltage}V</span>
+        </div>
+      `;
+    }
+
+    if (listBox) {
+      if (diag.items.length === 0) {
+        listBox.innerHTML = `
+          <div class="incomp-empty-state">
+            <div class="incomp-empty-icon">✅</div>
+            <div class="incomp-empty-title">Nenhuma incompatibilidade detectada!</div>
+            <div class="incomp-empty-desc">
+              O projeto elétrico está em total conformidade com a ABNT NBR 5410 e com as especificações da concessionária (${currentProject.supply.concessionaria} • ${currentProject.supply.system}).
+            </div>
+          </div>
+        `;
+      } else {
+        listBox.innerHTML = diag.items.map(it => `
+          <div class="incomp-item-card ${it.severity}">
+            <div class="incomp-item-header">
+              <span class="incomp-item-category">${it.category}</span>
+              <span class="badge ${it.severity === 'critical' ? 'badge-rose' : 'badge-amber'}">${it.badge}</span>
+            </div>
+            <div class="incomp-item-title">${it.title}</div>
+            <div class="incomp-item-desc">${it.description}</div>
+            ${it.actionLabel ? `
+              <div class="incomp-item-action-bar">
+                <button class="btn btn-sm ${it.severity === 'critical' ? 'btn-primary' : 'btn-secondary'}" onclick="App.fixIncompatibility('${it.actionType}', '${it.circuitId || it.relatedItemId || ''}')">
+                  ⚡ ${it.actionLabel}
+                </button>
+              </div>
+            ` : ''}
+          </div>
+        `).join('');
+      }
+    }
+  }
+
+  function openIncompatibilitiesModal() {
+    const modal = document.getElementById('incompatibilitiesModal');
+    if (!modal) return;
+    renderIncompatibilitiesModalContent();
+    modal.classList.add('active');
+  }
+
+  function closeIncompatibilitiesModal() {
+    const modal = document.getElementById('incompatibilitiesModal');
+    if (modal) modal.classList.remove('active');
+  }
+
+  function recheckIncompatibilities() {
+    renderIncompatibilitiesModalContent();
+    updateIncompatibilitiesBadge();
+    showToast('Auditoria técnica NBR 5410 atualizada!');
+  }
+
+  function fixIncompatibility(actionType, extraId) {
+    if (!currentProject) return;
+
+    if (actionType === 'set_system_trifasico') {
+      currentProject.supply.system = 'Trifásico';
+      currentProject.supply.lineVoltage = 220;
+      window.NBR5410.autoBalancePhases(currentProject);
+      showToast('⚡ Padrão de Entrada alterado para Trifásico (3F+N / 220V)!');
+    } else if (actionType === 'set_system_bifasico') {
+      currentProject.supply.system = 'Bifásico';
+      currentProject.supply.lineVoltage = 220;
+      window.NBR5410.autoBalancePhases(currentProject);
+      showToast('⚡ Padrão de Entrada alterado para Bifásico (2F+N)!');
+    } else if (actionType === 'auto_assign_circuits') {
+      window.NBR5410.autoGenerateNormativePointsAndCircuits(currentProject);
+      showToast('Circuitos redistribuídos e atribuídos aos pontos com sucesso!');
+    } else if (actionType === 'enable_circuit_dr') {
+      const circ = currentProject.circuits.find(c => c.id === extraId);
+      if (circ) {
+        circ.dr = true;
+        showToast(`Proteção IDR 30mA ativada no Circuito ${circ.id}!`);
+      }
+    } else if (actionType === 'upsize_breaker') {
+      const circ = currentProject.circuits.find(c => c.id === extraId);
+      if (circ) {
+        const standardBreakers = [10, 16, 20, 25, 32, 40, 50, 63, 70, 80, 100];
+        const next = standardBreakers.find(b => b > (circ.breakerA || 16)) || (circ.breakerA + 10);
+        circ.breakerA = next;
+        showToast(`Disjuntor do Circuito ${circ.id} aumentado para ${next}A!`);
+      }
+    } else if (actionType === 'upsize_conductor') {
+      const circ = currentProject.circuits.find(c => c.id === extraId);
+      if (circ) {
+        const sections = [1.5, 2.5, 4, 6, 10, 16, 25, 35];
+        const next = sections.find(s => s > (circ.sectionMm2 || 2.5)) || ((circ.sectionMm2 || 2.5) + 2.5);
+        circ.sectionMm2 = next;
+        showToast(`Seção do cabo do Circuito ${circ.id} aumentada para #${next}mm²!`);
+      }
+    } else if (actionType === 'upsize_conduit') {
+      const cd = (currentProject.conduits || []).find(c => c.circuitId === extraId);
+      if (cd) {
+        const standardSizes = [20, 25, 32, 40, 50];
+        const next = standardSizes.find(s => s > (cd.diameterMm || 20)) || ((cd.diameterMm || 20) + 5);
+        cd.diameterMm = next;
+        showToast(`Diâmetro do eletroduto ampliado para Ø${next}mm!`);
+      }
+    } else if (actionType === 'separate_circuit' || actionType === 'dedicate_tue_circuit') {
+      const nextNum = (currentProject.circuits || []).reduce((max, c) => Math.max(max, c.number || 0), 0) + 1;
+      const newCircId = `C${nextNum}`;
+      const newCirc = {
+        id: newCircId,
+        number: nextNum,
+        name: actionType === 'separate_circuit' ? `TUGs Separadas ${newCircId}` : `TUE Exclusivo ${newCircId}`,
+        type: actionType === 'separate_circuit' ? 'tug' : 'tue',
+        voltage: currentProject.supply.phaseVoltage || 127,
+        pf: 0.85,
+        phase: 'R',
+        dr: true,
+        fca: 0.8
+      };
+      currentProject.circuits.push(newCirc);
+
+      const pt = (currentProject.points || []).find(p => p.id === extraId);
+      if (pt) {
+        pt.circuitId = newCircId;
+        newCirc.name = pt.label || `TUE ${newCircId}`;
+      } else {
+        const mixedPts = (currentProject.points || []).filter(p => p.circuitId === extraId && ['tug', 'tue'].includes(p.category));
+        mixedPts.forEach(p => { p.circuitId = newCircId; });
+      }
+      showToast(`Novo circuito ${newCircId} criado para garantir a separação normativa NBR 5410!`);
+    }
+
+    syncAllScreens();
+    renderIncompatibilitiesModalContent();
   }
 
   function switchEditorTab(tabId) {
@@ -1215,29 +1444,48 @@ window.App = (function () {
       ).join('');
 
       let subtypeSelectorHtml = '';
-      if (pt.category === 'tug') {
+      const isOutlet = ['tug', 'tue', 'tomada_trifasica'].includes(pt.category);
+      if (isOutlet) {
+        const isTriPhase = pt.category === 'tomada_trifasica' || pt.subtype === 'trifasica' || !!pt.isThreePhase;
+        const gang = isTriPhase ? 1 : (pt.gangCount || (['tripla', 'tug_tripla'].includes(pt.subtype) ? 3 : ['dupla', 'tug_dupla'].includes(pt.subtype) ? 2 : 1));
+        const currentType = isTriPhase ? 'trifasica' : (gang === 3 ? 'tripla' : (gang === 2 ? 'dupla' : 'simples'));
+
+        const currentHeight = pt.heightType || (
+          (pt.category === 'tue' || Number(pt.z) >= 1.9 || pt.subtype === 'alta') ? 'alta' :
+          (Number(pt.z) >= 1.0 || pt.subtype === 'media' || pt.subtype === 'tug_media') ? 'media' : 'baixa'
+        );
+
         subtypeSelectorHtml = `
           <div class="form-group">
-            <label>Tipo de Tomada (Simples / Dupla / Tripla)</label>
-            <select class="form-select" onchange="App.updatePointSubtype('${pt.id}', this.value)">
-              <option value="baixa" ${pt.subtype === 'baixa' ? 'selected' : ''}>Tomada Simples Baixa (0.30m)</option>
-              <option value="dupla" ${pt.subtype === 'dupla' ? 'selected' : ''}>Tomada Dupla 2x (0.30m)</option>
-              <option value="tripla" ${pt.subtype === 'tripla' ? 'selected' : ''}>Tomada Tripla 3x (0.30m)</option>
-              <option value="media" ${pt.subtype === 'media' ? 'selected' : ''}>Tomada Média (1.30m)</option>
+            <label>Tipo de Tomada / Módulos</label>
+            <select class="form-select" onchange="App.updateOutletType('${pt.id}', this.value)">
+              <option value="simples" ${currentType === 'simples' ? 'selected' : ''}>Tomada Simples (1x)</option>
+              <option value="dupla" ${currentType === 'dupla' ? 'selected' : ''}>Tomada Dupla (2x)</option>
+              <option value="tripla" ${currentType === 'tripla' ? 'selected' : ''}>Tomada Tripla (3x)</option>
+              <option value="trifasica" ${currentType === 'trifasica' ? 'selected' : ''}>⚡ Tomada Trifásica Industrial (3Φ / 3P+T)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Altura da Instalação (Simbologia NBR 5444)</label>
+            <select class="form-select" onchange="App.updateOutletHeight('${pt.id}', this.value)">
+              <option value="baixa" ${currentHeight === 'baixa' ? 'selected' : ''}>Tomada Baixa (0.30 m) — Triângulo Vazado</option>
+              <option value="media" ${currentHeight === 'media' ? 'selected' : ''}>Tomada Média (1.30 m) — Semi-Preenchida</option>
+              <option value="alta" ${currentHeight === 'alta' ? 'selected' : ''}>Tomada Alta (2.20 m) — Totalmente Preenchida</option>
             </select>
           </div>
         `;
       } else if (pt.category === 'switch') {
+        const sub = (pt.subtype || 'simples').replace(/^int_/, '');
         subtypeSelectorHtml = `
           <div class="form-group">
-            <label>Tipo de Interruptor</label>
+            <label>Tipo de Interruptor (Simbologia NBR 5444)</label>
             <select class="form-select" onchange="App.updatePointSubtype('${pt.id}', this.value)">
-              <option value="simples" ${pt.subtype === 'simples' ? 'selected' : ''}>Interruptor Simples (1 Seção)</option>
-              <option value="duplo" ${pt.subtype === 'duplo' ? 'selected' : ''}>Interruptor Duplo (2 Seções)</option>
-              <option value="triplo" ${pt.subtype === 'triplo' ? 'selected' : ''}>Interruptor Triplo (3 Seções)</option>
-              <option value="3way" ${pt.subtype === '3way' ? 'selected' : ''}>Interruptor Paralelo (Three-Way)</option>
-              <option value="4way" ${pt.subtype === '4way' ? 'selected' : ''}>Interruptor Intermediário (Four-Way)</option>
-              <option value="campainha" ${pt.subtype === 'campainha' ? 'selected' : ''}>Pulsador de Campainha</option>
+              <option value="simples" ${sub === 'simples' ? 'selected' : ''}>Interruptor Simples (1S — Vazado)</option>
+              <option value="duplo" ${sub === 'duplo' ? 'selected' : ''}>Interruptor Duplo (2S — Bisseccionado)</option>
+              <option value="triplo" ${sub === 'triplo' ? 'selected' : ''}>Interruptor Triplo (3S — Trisseccionado)</option>
+              <option value="3way" ${sub === '3way' ? 'selected' : ''}>Interruptor Paralelo (Three-Way — Preenchido)</option>
+              <option value="4way" ${sub === '4way' ? 'selected' : ''}>Interruptor Intermediário (Four-Way — Meio Preenchido)</option>
+              <option value="campainha" ${sub === 'campainha' ? 'selected' : ''}>Pulsador de Campainha (Ponto Central)</option>
             </select>
           </div>
         `;
@@ -1386,42 +1634,69 @@ window.App = (function () {
       const dm = (currentProject.dimensions || []).find(d => d.id === selection.id);
       if (!dm) return;
       const dist = Math.hypot(dm.x2 - dm.x1, dm.y2 - dm.y1).toFixed(2);
+      const isHoriz = Math.abs(dm.y2 - dm.y1) < 0.03;
+      const isVert = Math.abs(dm.x2 - dm.x1) < 0.03;
+      const orientLabel = isHoriz ? 'Horizontal' : isVert ? 'Vertical' : `${(Math.atan2(dm.y2 - dm.y1, dm.x2 - dm.x1) * 180 / Math.PI).toFixed(0)}°`;
+
       box.innerHTML = `
         <div class="sidebar-section">
-          <div class="sidebar-section-title">Cota de Medição Manual</div>
-          <div style="background:var(--bg-primary); padding:10px; border-radius:6px; margin-bottom:10px; border:1px solid var(--border-subtle);">
-            Distância Medida: <strong class="mono" style="color:var(--brand-primary); font-size:14px;">${dist} m</strong>
+          <div class="sidebar-section-title">
+            <span>Editar Cota na Planta</span>
+            <span class="badge badge-amber">ABNT NBR 6492</span>
+          </div>
+          <div style="background:var(--bg-primary); padding:10px; border-radius:6px; margin-bottom:10px; border:1px solid var(--border-subtle); display:flex; justify-content:space-between; align-items:center;">
+            <div>
+              <div style="font-size:11px; color:var(--text-muted);">Comprimento:</div>
+              <strong id="inspectorDimDist" class="mono" style="color:var(--brand-primary); font-size:16px;">${dist} m</strong>
+            </div>
+            <div style="text-align:right;">
+              <div style="font-size:11px; color:var(--text-muted);">Orientação:</div>
+              <span class="badge badge-blue mono">${orientLabel}</span>
+            </div>
           </div>
           <div class="form-group">
-            <label>Texto Personalizado da Cota (Opcional)</label>
-            <input type="text" class="form-input mono" placeholder="${dist} m" value="${dm.label || ''}"
+            <label>Sobrescrever Texto da Cota (Opcional)</label>
+            <input type="text" class="form-input mono" placeholder="Automático (${dist} m)" value="${dm.label || ''}"
               oninput="App.updateDimensionPropLive('${dm.id}', 'label', this.value)" />
           </div>
           <div class="form-row">
             <div class="form-group">
-              <label>Início X1 (m)</label>
-              <input type="number" step="0.1" class="form-input mono" value="${dm.x1}"
+              <label>Ponto 1 — X1 (m)</label>
+              <input type="number" step="0.05" class="form-input mono" value="${dm.x1}"
                 oninput="App.updateDimensionPropLive('${dm.id}', 'x1', parseFloat(this.value))" />
             </div>
             <div class="form-group">
-              <label>Início Y1 (m)</label>
-              <input type="number" step="0.1" class="form-input mono" value="${dm.y1}"
+              <label>Ponto 1 — Y1 (m)</label>
+              <input type="number" step="0.05" class="form-input mono" value="${dm.y1}"
                 oninput="App.updateDimensionPropLive('${dm.id}', 'y1', parseFloat(this.value))" />
             </div>
           </div>
           <div class="form-row">
             <div class="form-group">
-              <label>Fim X2 (m)</label>
-              <input type="number" step="0.1" class="form-input mono" value="${dm.x2}"
+              <label>Ponto 2 — X2 (m)</label>
+              <input type="number" step="0.05" class="form-input mono" value="${dm.x2}"
                 oninput="App.updateDimensionPropLive('${dm.id}', 'x2', parseFloat(this.value))" />
             </div>
             <div class="form-group">
-              <label>Fim Y2 (m)</label>
-              <input type="number" step="0.1" class="form-input mono" value="${dm.y2}"
+              <label>Ponto 2 — Y2 (m)</label>
+              <input type="number" step="0.05" class="form-input mono" value="${dm.y2}"
                 oninput="App.updateDimensionPropLive('${dm.id}', 'y2', parseFloat(this.value))" />
             </div>
           </div>
-          <button class="btn btn-danger btn-block btn-sm" onclick="CAD2D.deleteSelectedItem()">Remover Cota</button>
+          <div style="margin-bottom:12px;">
+            <label style="display:block; font-size:11px; font-weight:700; color:var(--text-muted); margin-bottom:6px; text-transform:uppercase;">Alinhamento &amp; Conexão Rápida</label>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-bottom:6px;">
+              <button class="btn btn-secondary btn-sm" onclick="App.alignDimension('${dm.id}', 'horizontal')" title="Nivelar cota perfeitamente na horizontal">━ Horizontal</button>
+              <button class="btn btn-secondary btn-sm" onclick="App.alignDimension('${dm.id}', 'vertical')" title="Nivelar cota perfeitamente na vertical">┃ Vertical</button>
+            </div>
+            <div style="display:grid; grid-template-columns:1fr; gap:6px; margin-bottom:6px;">
+              <button class="btn btn-secondary btn-sm" onclick="App.reverseDimension('${dm.id}')" title="Inverter ordem dos pontos P1 e P2">⇄ Inverter Sentido (P1 ↔ P2)</button>
+              <button class="btn btn-secondary btn-sm" onclick="App.snapDimensionToNearestRoom('${dm.id}')" title="Conectar as pontas automaticamente às bordas do cômodo mais próximo">
+                🧲 Conectar às Bordas do Cômodo
+              </button>
+            </div>
+          </div>
+          <button class="btn btn-danger btn-block btn-sm" onclick="CAD2D.deleteSelectedItem()">Excluir Cota</button>
         </div>
       `;
     } else if (selection.kind === 'stair') {
@@ -1494,8 +1769,7 @@ window.App = (function () {
   function updateSupplyField(field, val) {
     if (!currentProject) return;
     currentProject.supply[field] = val;
-    saveProjectsToStorage();
-    updateEditorHeaderStats();
+    syncAllScreens();
     renderPropertyInspector(null);
   }
 
@@ -1503,8 +1777,7 @@ window.App = (function () {
     if (!currentProject) return;
     currentProject.supply.system = val;
     window.NBR5410.autoBalancePhases(currentProject);
-    saveProjectsToStorage();
-    updateEditorHeaderStats();
+    syncAllScreens();
     renderPropertyInspector(null);
   }
 
@@ -1513,8 +1786,7 @@ window.App = (function () {
     const parts = val.split('/');
     currentProject.supply.phaseVoltage = Number(parts[0]);
     currentProject.supply.lineVoltage = Number(parts[1]);
-    saveProjectsToStorage();
-    updateEditorHeaderStats();
+    syncAllScreens();
     renderPropertyInspector(null);
   }
 
@@ -1522,10 +1794,7 @@ window.App = (function () {
     const room = currentProject.rooms.find(r => r.id === roomId);
     if (!room) return;
     room[prop] = val;
-    saveProjectsToStorage();
-    window.CAD2D.render();
-    renderSidebarRoomList();
-    populate3DRoomFilterDropdown();
+    syncAllScreens();
   }
 
   function updateRoomDimensionLive(roomId, prop, val) {
@@ -1546,11 +1815,7 @@ window.App = (function () {
       }
     });
 
-    saveProjectsToStorage();
-    window.CAD2D.render();
-    renderSidebarRoomList();
-    populate3DRoomFilterDropdown();
-    updateEditorHeaderStats();
+    syncAllScreens();
 
     const summaryBox = document.getElementById('roomNormSummaryBox');
     if (summaryBox) {
@@ -1567,10 +1832,7 @@ window.App = (function () {
     const room = currentProject.rooms.find(r => r.id === roomId);
     if (!room) return;
     room[prop] = val;
-    saveProjectsToStorage();
-    window.CAD2D.render();
-    renderSidebarRoomList();
-    updateEditorHeaderStats();
+    syncAllScreens();
     renderPropertyInspector({ kind: 'room', id: roomId });
   }
 
@@ -1579,45 +1841,133 @@ window.App = (function () {
     if (!pt) return;
     if (typeof val === 'number' && isNaN(val)) return;
     pt[prop] = val;
-    saveProjectsToStorage();
-    window.CAD2D.render();
-    updateEditorHeaderStats();
+    if (prop === 'z' && ['tug', 'tue', 'tomada_trifasica'].includes(pt.category)) {
+      if (val >= 1.9) pt.heightType = 'alta';
+      else if (val >= 1.0) pt.heightType = 'media';
+      else pt.heightType = 'baixa';
+    }
+    syncAllScreens();
   }
 
   function updatePointProp(ptId, prop, val) {
     const pt = currentProject.points.find(p => p.id === ptId);
     if (!pt) return;
     pt[prop] = val;
-    saveProjectsToStorage();
-    window.CAD2D.render();
-    updateEditorHeaderStats();
+    if (prop === 'z' && ['tug', 'tue', 'tomada_trifasica'].includes(pt.category)) {
+      if (val >= 1.9) pt.heightType = 'alta';
+      else if (val >= 1.0) pt.heightType = 'media';
+      else pt.heightType = 'baixa';
+    }
+    syncAllScreens();
+    renderPropertyInspector({ kind: 'point', id: ptId });
+  }
+
+  function updateOutletType(ptId, newType) {
+    const pt = currentProject.points.find(p => p.id === ptId);
+    if (!pt) return;
+
+    if (newType === 'trifasica') {
+      pt.category = 'tomada_trifasica';
+      pt.subtype = 'trifasica';
+      pt.isThreePhase = true;
+      pt.gangCount = 1;
+      if (!pt.powerVA || pt.powerVA < 2000) pt.powerVA = 7500;
+      pt.label = 'Tomada Trifásica (3Φ)';
+    } else {
+      pt.subtype = newType;
+      delete pt.isThreePhase;
+
+      if (newType === 'simples') {
+        pt.gangCount = 1;
+        const isHigh = pt.heightType === 'alta' || (pt.z && pt.z >= 1.9);
+        pt.category = isHigh ? 'tue' : 'tug';
+        if (isHigh) {
+          if (!pt.powerVA || pt.powerVA <= 600) pt.powerVA = 5500;
+          pt.label = 'TUE Alta 5500VA';
+        } else if (pt.heightType === 'media') {
+          pt.powerVA = 600;
+          pt.label = 'TUG Média 600VA';
+        } else {
+          pt.powerVA = 100;
+          pt.label = 'TUG 100VA';
+        }
+      } else if (newType === 'dupla') {
+        pt.gangCount = 2;
+        pt.category = 'tug';
+        pt.powerVA = 200;
+        pt.label = 'TUG Dupla (2x100VA)';
+      } else if (newType === 'tripla') {
+        pt.gangCount = 3;
+        pt.category = 'tug';
+        pt.powerVA = 300;
+        pt.label = 'TUG Tripla (3x100VA)';
+      }
+    }
+
+    syncAllScreens();
+    renderPropertyInspector({ kind: 'point', id: ptId });
+  }
+
+  function updateOutletHeight(ptId, newHeight) {
+    const pt = currentProject.points.find(p => p.id === ptId);
+    if (!pt) return;
+
+    pt.heightType = newHeight;
+    const isTriPhase = pt.category === 'tomada_trifasica' || pt.subtype === 'trifasica';
+
+    if (newHeight === 'baixa') {
+      pt.z = 0.3;
+      if (!isTriPhase) {
+        pt.category = 'tug';
+        if (pt.powerVA > 600) pt.powerVA = (pt.gangCount || 1) * 100;
+      }
+    } else if (newHeight === 'media') {
+      pt.z = 1.3;
+      if (!isTriPhase) {
+        pt.category = 'tug';
+        if (pt.gangCount === 1 && pt.powerVA < 600) pt.powerVA = 600;
+      }
+    } else if (newHeight === 'alta') {
+      pt.z = 2.2;
+      if (!isTriPhase && (!pt.gangCount || pt.gangCount === 1)) {
+        pt.category = 'tue';
+        if (!pt.powerVA || pt.powerVA <= 600) pt.powerVA = 5500;
+      }
+    }
+
+    syncAllScreens();
     renderPropertyInspector({ kind: 'point', id: ptId });
   }
 
   function updatePointSubtype(ptId, newSubtype) {
     const pt = currentProject.points.find(p => p.id === ptId);
     if (!pt) return;
-    pt.subtype = newSubtype;
-    if (pt.category === 'tug') {
-      if (newSubtype === 'dupla') { pt.powerVA = 200; pt.label = 'TUG Dupla (2x100VA)'; }
-      else if (newSubtype === 'tripla') { pt.powerVA = 300; pt.label = 'TUG Tripla (3x100VA)'; }
-      else if (newSubtype === 'media') { pt.powerVA = 600; pt.z = 1.3; pt.label = 'TUG 600VA'; }
-      else { pt.powerVA = 100; pt.z = 0.3; pt.label = 'TUG 100VA'; }
-    } else if (pt.category === 'switch') {
+    const cleanSub = newSubtype.replace(/^int_/, '');
+    pt.subtype = cleanSub;
+
+    if (pt.category === 'switch') {
       const labels = {
-        simples: 'Int. Simples',
-        duplo: 'Int. Duplo (a/b)',
-        triplo: 'Int. Triplo (a/b/c)',
-        '3way': 'Int. Three-Way',
-        '4way': 'Int. Four-Way',
+        simples: 'Int. Simples (1S)',
+        duplo: 'Int. Duplo (2S)',
+        triplo: 'Int. Triplo (3S)',
+        '3way': 'Int. Three-Way (S3w)',
+        '4way': 'Int. Four-Way (S4w)',
         campainha: 'Pulsador Campainha'
       };
-      pt.label = labels[newSubtype] || pt.label;
+      pt.label = labels[cleanSub] || pt.label;
+      if (cleanSub === 'duplo' && (!pt.command || !pt.command.includes(','))) {
+        pt.command = 'a1,b1';
+      } else if (cleanSub === 'triplo' && (!pt.command || (pt.command.match(/,/g) || []).length < 2)) {
+        pt.command = 'a1,b1,c1';
+      }
+    } else if (pt.category === 'tug') {
+      if (cleanSub === 'dupla') { pt.gangCount = 2; pt.powerVA = 200; pt.label = 'TUG Dupla (2x100VA)'; }
+      else if (cleanSub === 'tripla') { pt.gangCount = 3; pt.powerVA = 300; pt.label = 'TUG Tripla (3x100VA)'; }
+      else if (cleanSub === 'media') { pt.gangCount = 1; pt.heightType = 'media'; pt.powerVA = 600; pt.z = 1.3; pt.label = 'TUG 600VA'; }
+      else { pt.gangCount = 1; pt.heightType = 'baixa'; pt.powerVA = 100; pt.z = 0.3; pt.label = 'TUG 100VA'; }
     }
-    saveProjectsToStorage();
-    window.CAD2D.render();
-    window.Viewer3D.render();
-    updateEditorHeaderStats();
+
+    syncAllScreens();
     renderPropertyInspector({ kind: 'point', id: ptId });
   }
 
@@ -1651,6 +2001,86 @@ window.App = (function () {
     dm[prop] = val;
     saveProjectsToStorage();
     window.CAD2D.render();
+    const distEl = document.getElementById('inspectorDimDist');
+    if (distEl) {
+      const dist = Math.hypot(dm.x2 - dm.x1, dm.y2 - dm.y1).toFixed(2);
+      distEl.textContent = `${dist} m`;
+    }
+  }
+
+  function alignDimension(dmId, orientation) {
+    if (!currentProject || !currentProject.dimensions) return;
+    const dm = currentProject.dimensions.find(d => d.id === dmId);
+    if (!dm) return;
+    window.CAD2D.pushHistorySnapshot();
+    if (orientation === 'horizontal') {
+      dm.y2 = dm.y1;
+    } else if (orientation === 'vertical') {
+      dm.x2 = dm.x1;
+    }
+    saveProjectsToStorage();
+    window.CAD2D.render();
+    renderPropertyInspector({ kind: 'dimension', id: dmId });
+    showToast(`Cota alinhada na ${orientation === 'horizontal' ? 'horizontal' : 'vertical'}!`);
+  }
+
+  function reverseDimension(dmId) {
+    if (!currentProject || !currentProject.dimensions) return;
+    const dm = currentProject.dimensions.find(d => d.id === dmId);
+    if (!dm) return;
+    window.CAD2D.pushHistorySnapshot();
+    const tx = dm.x1; const ty = dm.y1;
+    dm.x1 = dm.x2; dm.y1 = dm.y2;
+    dm.x2 = tx; dm.y2 = ty;
+    saveProjectsToStorage();
+    window.CAD2D.render();
+    renderPropertyInspector({ kind: 'dimension', id: dmId });
+    showToast('Sentido da cota invertido (P1 ↔ P2)!');
+  }
+
+  function snapDimensionToNearestRoom(dmId) {
+    if (!currentProject || !currentProject.dimensions || !currentProject.rooms || currentProject.rooms.length === 0) return;
+    const dm = currentProject.dimensions.find(d => d.id === dmId);
+    if (!dm) return;
+
+    window.CAD2D.pushHistorySnapshot();
+    const mx = (dm.x1 + dm.x2) / 2;
+    const my = (dm.y1 + dm.y2) / 2;
+
+    let nearestRoom = null;
+    let minDist = Infinity;
+    currentProject.rooms.forEach(r => {
+      const rx = r.x + r.w / 2;
+      const ry = r.y + r.h / 2;
+      const d = Math.hypot(mx - rx, my - ry);
+      if (d < minDist) {
+        minDist = d;
+        nearestRoom = r;
+      }
+    });
+
+    if (nearestRoom) {
+      const isHoriz = Math.abs(dm.x2 - dm.x1) >= Math.abs(dm.y2 - dm.y1);
+      if (isHoriz) {
+        const snapTop = Math.abs(my - nearestRoom.y) < Math.abs(my - (nearestRoom.y + nearestRoom.h));
+        const targetY = snapTop ? nearestRoom.y : +(nearestRoom.y + nearestRoom.h).toFixed(2);
+        dm.x1 = nearestRoom.x;
+        dm.y1 = targetY;
+        dm.x2 = +(nearestRoom.x + nearestRoom.w).toFixed(2);
+        dm.y2 = targetY;
+      } else {
+        const snapLeft = Math.abs(mx - nearestRoom.x) < Math.abs(mx - (nearestRoom.x + nearestRoom.w));
+        const targetX = snapLeft ? nearestRoom.x : +(nearestRoom.x + nearestRoom.w).toFixed(2);
+        dm.x1 = targetX;
+        dm.y1 = nearestRoom.y;
+        dm.x2 = targetX;
+        dm.y2 = +(nearestRoom.y + nearestRoom.h).toFixed(2);
+      }
+      saveProjectsToStorage();
+      window.CAD2D.render();
+      renderPropertyInspector({ kind: 'dimension', id: dmId });
+      showToast(`Cota conectada às bordas de "${nearestRoom.name}"!`);
+    }
   }
 
   function updateStairPropLive(stId, prop, val) {
@@ -1855,9 +2285,7 @@ window.App = (function () {
     const c = currentProject.circuits.find(item => item.id === circuitId);
     if (!c) return;
     c[prop] = val;
-    saveProjectsToStorage();
-    renderCircuitsPanel();
-    updateEditorHeaderStats();
+    syncAllScreens();
   }
 
   function addNewCircuit() {
@@ -1875,17 +2303,14 @@ window.App = (function () {
       dr: true,
       fca: 0.8
     });
-    saveProjectsToStorage();
-    renderCircuitsPanel();
+    syncAllScreens();
     showToast(`Circuito ${id} adicionado ao quadro!`);
   }
 
   function runAutoBalancePhases() {
     if (!currentProject) return;
     window.NBR5410.autoBalancePhases(currentProject);
-    saveProjectsToStorage();
-    renderCircuitsPanel();
-    renderBoardAndUnifilarPanel();
+    syncAllScreens();
     showToast('Fases R, S e T balanceadas automaticamente para menor desequilíbrio!');
   }
 
@@ -2386,9 +2811,14 @@ window.App = (function () {
     updatePointPropLive,
     updatePointProp,
     updatePointSubtype,
+    updateOutletType,
+    updateOutletHeight,
     updateConduitProp,
     updateTextPropLive,
     updateDimensionPropLive,
+    alignDimension,
+    reverseDimension,
+    snapDimensionToNearestRoom,
     updateStairPropLive,
     updateStairProp,
     addOpeningToRoom,
@@ -2404,7 +2834,12 @@ window.App = (function () {
     selectPrintSheet,
     addPrintSheet,
     deletePrintSheet,
-    updateActivePrintSheet
+    updateActivePrintSheet,
+    syncAllScreens,
+    openIncompatibilitiesModal,
+    closeIncompatibilitiesModal,
+    recheckIncompatibilities,
+    fixIncompatibility
   };
 })();
 

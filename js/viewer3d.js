@@ -313,7 +313,7 @@ window.Viewer3D = (function () {
       }
     }
     if (pt.category === 'tug') return layers3d.tug;
-    if (pt.category === 'tue') return layers3d.tue;
+    if (pt.category === 'tue' || pt.category === 'tomada_trifasica') return layers3d.tue;
     if (pt.category === 'light' || pt.category === 'sensor') return layers3d.light;
     if (pt.category === 'switch') return layers3d.switch;
     if (['telecom', 'bell', 'camera', 'jbox', 'riser'].includes(pt.category)) return layers3d.telecom;
@@ -867,7 +867,7 @@ window.Viewer3D = (function () {
       drawRevitCeilingFixture3D(pt, z, center, pos3d, floor3d);
     } else if (pt.category === 'switch') {
       drawRevitSwitch4x2Family3D(pt, z, basis, center, pos3d);
-    } else if (pt.category === 'tug' || pt.category === 'tue' || pt.category === 'telecom' || pt.category === 'bell') {
+    } else if (pt.category === 'tug' || pt.category === 'tue' || pt.category === 'tomada_trifasica' || pt.category === 'telecom' || pt.category === 'bell') {
       drawRevitOutlet4x2Family3D(pt, z, basis, center, pos3d);
     } else {
       // Câmera CFTV, Caixa de Passagem ou Eletroduto Sobe/Desce
@@ -1031,8 +1031,9 @@ window.Viewer3D = (function () {
   }
 
   function drawRevitOutlet4x2Family3D(pt, z, basis, center, pos3d) {
-    const is20A = pt.category === 'tue' || Number(pt.powerVA) >= 600;
-    const gangCount = pt.subtype === 'tug_tripla' ? 3 : pt.subtype === 'tug_dupla' ? 2 : 1;
+    const isTriPhase = pt.category === 'tomada_trifasica' || pt.subtype === 'trifasica' || !!pt.isThreePhase;
+    const is20A = !isTriPhase && (pt.category === 'tue' || Number(pt.powerVA) >= 600 || pt.heightType === 'alta');
+    const gangCount = isTriPhase ? 1 : (pt.gangCount || (['tripla', 'tug_tripla'].includes(pt.subtype) ? 3 : (['dupla', 'tug_dupla'].includes(pt.subtype) ? 2 : 1)));
 
     draw3DBox(
       center,
@@ -1042,7 +1043,7 @@ window.Viewer3D = (function () {
         z
       },
       basis,
-      { w: 0.18, d: 0.05, h: 0.28 },
+      { w: isTriPhase ? 0.22 : 0.18, d: 0.05, h: isTriPhase ? 0.32 : 0.28 },
       { top: '#facc15', side: '#ca8a04', front: '#eab308', stroke: '#854d0e' }
     );
 
@@ -1050,12 +1051,40 @@ window.Viewer3D = (function () {
       center,
       { x: pt.x, y: pt.y, z },
       basis,
-      { w: 0.22, d: 0.035, h: 0.32 },
-      { top: '#ffffff', side: '#cbd5e1', front: '#f8fafc', stroke: '#475569' }
+      { w: isTriPhase ? 0.25 : 0.22, d: 0.035, h: isTriPhase ? 0.35 : 0.32 },
+      isTriPhase
+        ? { top: '#fed7aa', side: '#ea580c', front: '#f97316', stroke: '#c2410c' }
+        : { top: '#ffffff', side: '#cbd5e1', front: '#f8fafc', stroke: '#475569' }
     );
 
     ctx.save();
     ctx.translate(pos3d.x, pos3d.y);
+
+    if (isTriPhase) {
+      // Tomada Industrial 3P+T (IEC 60309)
+      ctx.beginPath();
+      ctx.arc(0, 0, 7.5, 0, Math.PI * 2);
+      ctx.fillStyle = '#dc2626';
+      ctx.fill();
+      ctx.strokeStyle = '#991b1b';
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+
+      // 4 pinos (3 fases + terra)
+      [
+        { x: -3.2, y: -2.8 },
+        { x: 3.2, y: -2.8 },
+        { x: -3.2, y: 2.8 },
+        { x: 3.2, y: 2.8 }
+      ].forEach(p => {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 1.3, 0, Math.PI * 2);
+        ctx.fillStyle = '#fef08a';
+        ctx.fill();
+      });
+      ctx.restore();
+      return;
+    }
 
     const offsetsY = gangCount === 3 ? [-6, 0, 6] : gangCount === 2 ? [-4, 4] : [0];
     const modW = 13;
@@ -1097,7 +1126,8 @@ window.Viewer3D = (function () {
   }
 
   function drawRevitSwitch4x2Family3D(pt, z, basis, center, pos3d) {
-    const gang = pt.subtype === 'int_triplo' ? 3 : pt.subtype === 'int_duplo' ? 2 : 1;
+    const rawSub = (pt.subtype || 'simples').replace(/^int_/, '');
+    const gang = rawSub === 'triplo' ? 3 : rawSub === 'duplo' ? 2 : 1;
 
     draw3DBox(
       center,

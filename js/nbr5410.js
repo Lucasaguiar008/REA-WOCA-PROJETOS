@@ -94,8 +94,9 @@ window.NBR5410 = (function () {
       if (pt.category === 'light') {
         installedLightingVA += Number(pt.powerVA || 100);
       } else if (pt.category === 'tug') {
-        installedTugCount += 1;
-        installedTugVA += Number(pt.powerVA || 100);
+        const mult = pt.subtype === 'tug_tripla' ? 3 : pt.subtype === 'tug_dupla' ? 2 : 1;
+        installedTugCount += mult;
+        installedTugVA += Number(pt.powerVA || (100 * mult));
       } else if (pt.category === 'tue') {
         installedTueVA += Number(pt.powerVA || 0);
         tueList.push(pt.label || 'TUE');
@@ -131,28 +132,111 @@ window.NBR5410 = (function () {
     );
   }
 
+  // Verifica se um candidato (x, y) na parede colide com alguma porta ou vão livre (do próprio cômodo ou cômodo adjacente)
+  function isPointCollidingWithDoorOrOpening(x, y, project, marginMeters = 0.22) {
+    if (!project || !Array.isArray(project.openings)) return false;
+    for (const op of project.openings) {
+      // Portas e vãos livres não têm parede física; janelas altas permitem tomada baixa, mas evitamos sobrepor se possível
+      if (op.type !== 'door' && op.type !== 'opening') continue;
+      const opRoom = (project.rooms || []).find(r => r.id === op.roomId);
+      if (!opRoom) continue;
+      const geom = getOpeningWorldGeometry(op, opRoom);
+      if (!geom) continue;
+
+      // Distância do ponto (x,y) ao segmento da abertura (x1,y1)-(x2,y2)
+      const dx = geom.x2 - geom.x1;
+      const dy = geom.y2 - geom.y1;
+      const lenSq = dx * dx + dy * dy;
+      let t = 0.5;
+      if (lenSq > 0.0001) {
+        t = Math.max(0, Math.min(1, ((x - geom.x1) * dx + (y - geom.y1) * dy) / lenSq));
+      }
+      const projX = geom.x1 + t * dx;
+      const projY = geom.y1 + t * dy;
+      const dist = Math.hypot(x - projX, y - projY);
+      if (dist < marginMeters) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // Encontra uma posição segura na parede do cômodo que NÃO colida com portas ou vãos livres
+  function findSafeWallPoint(room, preferredWall, preferredT, project, inset = 0.14) {
+    const wallOrder = [preferredWall, 'n', 'e', 'w', 's'].filter((v, i, a) => a.indexOf(v) === i);
+    const candidateTs = [preferredT, 0.22, 0.78, 0.35, 0.65, 0.15, 0.85, 0.50];
+
+    const evalWallPoint = (w, t) => {
+      if (w === 'n') return { x: +(room.x + room.w * t).toFixed(2), y: +(room.y + inset).toFixed(2), wall: 'n' };
+      if (w === 's') return { x: +(room.x + room.w * t).toFixed(2), y: +(room.y + room.h - inset).toFixed(2), wall: 's' };
+      if (w === 'e') return { x: +(room.x + room.w - inset).toFixed(2), y: +(room.y + room.h * t).toFixed(2), wall: 'e' };
+      return { x: +(room.x + inset).toFixed(2), y: +(room.y + room.h * t).toFixed(2), wall: 'w' };
+    };
+
+    for (const w of wallOrder) {
+      for (const t of candidateTs) {
+        const pt = evalWallPoint(w, t);
+        if (!isPointCollidingWithDoorOrOpening(pt.x, pt.y, project, 0.24)) {
+          return pt;
+        }
+      }
+    }
+    return evalWallPoint(preferredWall, preferredT);
+  }
+
+  // Posiciona interruptor automaticamente ao lado da maçaneta da porta do cômodo (fora do vão da porta)
+  function findSwitchPositionNearRoomDoor(room, project, inset = 0.14) {
+    if (project && Array.isArray(project.openings)) {
+      const roomDoor = project.openings.find(op => op.roomId === room.id && op.type === 'door');
+      if (roomDoor) {
+        const w = roomDoor.wall || 's';
+        const wallLen = (w === 'n' || w === 's') ? room.w : room.h;
+        const halfW = (Number(roomDoor.width) || 0.8) / 2;
+        const doorOff = Number(roomDoor.offset) || wallLen / 2;
+        // Tenta posicionar a 18cm após a borda da porta ou antes da borda
+        const candidates = [doorOff + halfW + 0.20, doorOff - halfW - 0.20];
+        for (const off of candidates) {
+          if (off >= 0.18 && off <= wallLen - 0.18) {
+            const t = off / wallLen;
+            const pt = findSafeWallPoint(room, w, t, project, inset);
+            if (!isPointCollidingWithDoorOrOpening(pt.x, pt.y, project, 0.18)) {
+              return pt;
+            }
+          }
+        }
+      }
+    }
+    return findSafeWallPoint(room, 's', 0.25, project, inset);
+  }
+
   // Sugere e posiciona automaticamente todos os pontos da NBR 5410 na planta + traçado de eletrodutos
   function autoGenerateNormativePointsAndCircuits(project) {
+    ensureProjectOpenings(project);
     const newPoints = [];
     const newConduits = [];
     let ptCounter = 1;
 
-    // Mantém ou cria Quadro de Distribuição (QDC)
+    // Mantém ou cria Quadro de Distribuição (QDC) garantindo que não fique em porta ou vão livre
     let qdc = project.points.find(p => p.category === 'qdc');
+    const refRoom = project.rooms.find(r => r.type === 'corredor' || r.type === 'cozinha' || r.type === 'sala') || project.rooms[0];
     if (!qdc) {
-      const refRoom = project.rooms.find(r => r.type === 'corredor' || r.type === 'cozinha' || r.type === 'sala') || project.rooms[0];
+      const safeQdcPos = refRoom ? findSafeWallPoint(refRoom, 'w', 0.5, project, 0.16) : { x: 2.0, y: 2.0 };
       qdc = {
         id: 'pt-qdc-1',
         category: 'qdc',
         subtype: 'qdc_embutir',
         label: 'QDC-01',
-        x: refRoom ? +(refRoom.x + 0.35).toFixed(2) : 2.0,
-        y: refRoom ? +(refRoom.y + refRoom.h / 2).toFixed(2) : 2.0,
+        x: safeQdcPos.x,
+        y: safeQdcPos.y,
         z: 1.5,
         powerVA: 0,
         circuitId: null,
         roomId: refRoom ? refRoom.id : null
       };
+    } else if (refRoom && isPointCollidingWithDoorOrOpening(qdc.x, qdc.y, project, 0.25)) {
+      const safeQdcPos = findSafeWallPoint(refRoom, 'n', 0.5, project, 0.16);
+      qdc.x = safeQdcPos.x;
+      qdc.y = safeQdcPos.y;
     }
     newPoints.push(qdc);
 
@@ -190,15 +274,16 @@ window.NBR5410 = (function () {
       };
       newPoints.push(lightPt);
 
-      // 2. Interruptor próximo à porta/entrada do cômodo
+      // 2. Interruptor próximo à porta/entrada do cômodo (sem colidir com vão/porta)
+      const swPos = findSwitchPositionNearRoomDoor(room, project, 0.14);
       const swPt = {
         id: `pt-auto-${ptCounter++}`,
         category: 'switch',
         subtype: 'int_simples',
         label: `Int. ${room.name}`,
         command: commandId,
-        x: +(room.x + 0.35).toFixed(2),
-        y: +(room.y + room.h - 0.12).toFixed(2),
+        x: swPos.x,
+        y: swPos.y,
         z: 1.2,
         powerVA: 0,
         circuitId: lightCircuitId,
@@ -222,7 +307,7 @@ window.NBR5410 = (function () {
         diameterMm: 20
       });
 
-      // 3. TUGs distribuídas nas paredes do ambiente
+      // 3. TUGs distribuídas nas paredes do ambiente (evitando portas e vãos livres)
       const tugCircuitId =
         room.type === 'cozinha'
           ? 'C4'
@@ -230,7 +315,7 @@ window.NBR5410 = (function () {
             ? 'C5'
             : 'C3';
 
-      const wallPositions = getDistributedWallPositions(room, norms.minTugCount);
+      const wallPositions = getDistributedWallPositions(room, norms.minTugCount, project);
       wallPositions.forEach((pos, idx) => {
         const isHigh = idx < norms.highCount;
         const tugPt = {
@@ -248,6 +333,7 @@ window.NBR5410 = (function () {
         newPoints.push(tugPt);
         newConduits.push({
           id: `cd-auto-${ptCounter++}`,
+          idCircuit: tugCircuitId,
           fromId: lightPt.id,
           toId: tugPt.id,
           mounting: 'parede',
@@ -270,13 +356,14 @@ window.NBR5410 = (function () {
           dr: true,
           fca: 1.0
         });
+        const tuePos = findSafeWallPoint(room, 'e', 0.5, project, 0.14);
         const tuePt = {
           id: `pt-auto-${ptCounter++}`,
           category: 'tue',
           subtype: 'tue_alta',
           label: 'Chuveiro 6800W',
-          x: +(room.x + room.w - 0.12).toFixed(2),
-          y: +(room.y + room.h / 2).toFixed(2),
+          x: tuePos.x,
+          y: tuePos.y,
           z: 2.2,
           powerVA: 6800,
           circuitId: cId,
@@ -304,13 +391,14 @@ window.NBR5410 = (function () {
           dr: false,
           fca: 0.8
         });
+        const tuePos = findSafeWallPoint(room, 'n', 0.5, project, 0.14);
         const tuePt = {
           id: `pt-auto-${ptCounter++}`,
           category: 'tue',
           subtype: 'tue_alta',
           label: 'Split 12000 BTU',
-          x: +(room.x + room.w / 2).toFixed(2),
-          y: +(room.y + 0.12).toFixed(2),
+          x: tuePos.x,
+          y: tuePos.y,
           z: 2.2,
           powerVA: 1400,
           circuitId: cId,
@@ -330,29 +418,27 @@ window.NBR5410 = (function () {
     project.points = newPoints;
     project.conduits = newConduits;
     project.circuits = circuits;
-    ensureProjectOpenings(project);
     return project;
   }
 
-  function getDistributedWallPositions(room, count) {
+  function getDistributedWallPositions(room, count, project) {
     const positions = [];
     const margin = 0.14;
-    const walls = [
-      // Parede Norte
-      (t) => ({ x: +(room.x + room.w * t).toFixed(2), y: +(room.y + margin).toFixed(2) }),
-      // Parede Leste
-      (t) => ({ x: +(room.x + room.w - margin).toFixed(2), y: +(room.y + room.h * t).toFixed(2) }),
-      // Parede Oeste
-      (t) => ({ x: +(room.x + margin).toFixed(2), y: +(room.y + room.h * t).toFixed(2) }),
-      // Parede Sul
-      (t) => ({ x: +(room.x + room.w * t).toFixed(2), y: +(room.y + room.h - margin).toFixed(2) })
-    ];
+    const wallCodes = ['n', 'e', 'w', 's'];
 
     for (let i = 0; i < count; i++) {
-      const wallFn = walls[i % walls.length];
-      const slot = Math.floor(i / walls.length);
-      const t = slot === 0 ? 0.5 : slot % 2 === 1 ? 0.28 : 0.72;
-      positions.push(wallFn(t));
+      const wallCode = wallCodes[i % wallCodes.length];
+      const slot = Math.floor(i / wallCodes.length);
+      const preferredT = slot === 0 ? 0.5 : slot % 2 === 1 ? 0.28 : 0.72;
+      const safePt = findSafeWallPoint(room, wallCode, preferredT, project, margin);
+      // Evita duplicar exatamente a mesma coordenada caso uma parede inteira seja vão livre
+      const tooClose = positions.some(p => Math.hypot(p.x - safePt.x, p.y - safePt.y) < 0.25);
+      if (tooClose) {
+        const altWall = wallCodes[(i + 1) % wallCodes.length];
+        positions.push(findSafeWallPoint(room, altWall, (preferredT + 0.23) % 0.8 + 0.1, project, margin));
+      } else {
+        positions.push(safePt);
+      }
     }
     return positions;
   }
@@ -419,14 +505,33 @@ window.NBR5410 = (function () {
         : 1;
       const curve = circuit.type === 'iluminacao' || (circuit.type === 'tue' && pf === 1.0) ? 'B' : 'C';
 
-      // Eletroduto mínimo por ocupação
-      const conduitMm = chosenRow.section >= 6 ? 25 : 20;
+      // Eletroduto mínimo por ocupação (NBR 5410 item 6.2.11.1.6: máx 40% para 3 ou mais condutores)
+      const conductorCount = poles + (poles === 1 || circuit.type !== 'tue' ? 1 : 0) + 1 + (circuit.type === 'iluminacao' ? 1 : 0);
+      // Área externa aproximada do cabo isolado 750V (mm²) conforme seção nominal
+      const cableOuterAreaMap = { 1.5: 7.1, 2.5: 10.2, 4.0: 13.8, 6.0: 18.9, 10.0: 30.2, 16.0: 43.0, 25.0: 66.5, 35.0: 88.2 };
+      const singleWireOuterArea = cableOuterAreaMap[chosenRow.section] || 12.0;
+      const totalWireOuterArea = +(conductorCount * singleWireOuterArea).toFixed(1);
+
+      // Áreas internas úteis dos eletrodutos comerciais PVC (mm²) e limite de 40%
+      const conduitSizes = [
+        { mm: 20, inch: '3/4"', internalArea: 215 },
+        { mm: 25, inch: '1"', internalArea: 360 },
+        { mm: 32, inch: '1.1/4"', internalArea: 615 },
+        { mm: 40, inch: '1.1/2"', internalArea: 960 },
+        { mm: 50, inch: '2"', internalArea: 1590 }
+      ];
+      let chosenConduit = conduitSizes.find(cd => (totalWireOuterArea / cd.internalArea) <= 0.40 && (chosenRow.section < 6 || cd.mm >= 25)) || conduitSizes[conduitSizes.length - 1];
+      const conduitMm = chosenConduit.mm;
+      const conduitInch = chosenConduit.inch;
+      const conduitOccupancyPct = Math.min(99, Math.round((totalWireOuterArea / chosenConduit.internalArea) * 100));
 
       // Alocação de fase
       const phase = circuit.phase || ['R', 'S', 'T'][idx % 3];
+      const boardId = circuit.boardId || 'QDC-01';
 
       return {
         ...circuit,
+        boardId,
         pointsCount: assignedPoints.length,
         totalVA,
         totalW,
@@ -443,13 +548,16 @@ window.NBR5410 = (function () {
         poles,
         curve,
         conduitMm,
+        conduitInch,
+        conductorCount,
+        conduitOccupancyPct,
         phase,
         statusOk: ib <= breakerA && breakerA <= izReal + 2 && voltageDropPercent <= 4.0
       };
     });
   }
 
-  // Calcula balanceamento entre fases R, S, T e Demanda Total do Quadro (QDC)
+  // Calcula balanceamento entre fases R, S, T, Demanda Total do Quadro (QDC) e Padrão de Entrada da Concessionária
   function calculateBoardSummary(project, evaluatedCircuits) {
     const phases = { R: 0, S: 0, T: 0 };
     let totalInstalledVA = 0;
@@ -497,10 +605,23 @@ window.NBR5410 = (function () {
 
     const mainBreakerA = STANDARD_BREAKERS.find(b => b >= Math.max(mainCurrentA * 1.1, 32)) || 63;
     const mainCableRow = AMPACITY_TABLE_B1.find(r => r.iz3 >= mainBreakerA) || AMPACITY_TABLE_B1[4];
+    const mainConduitMm = mainCableRow.section >= 16 ? 40 : mainCableRow.section >= 10 ? 32 : 25;
 
     const maxPhaseVA = Math.max(phases.R, phases.S, phases.T, 1);
     const minPhaseVA = Math.min(phases.R, phases.S, phases.T);
     const unbalancePercent = +(((maxPhaseVA - minPhaseVA) / maxPhaseVA) * 100).toFixed(1);
+
+    // Dimensionamento do Padrão de Entrada da Concessionária (Item 6)
+    const entranceType = project.supply.entranceType || 'Aéreo com Poste Pontalete';
+    const utilityName = project.supply.utilityName || 'Concessionária Local (Enel / CPFL / Cemig / Equatorial)';
+    const categoryCode =
+      supplyType === 'Monofásico'
+        ? (demandKVA <= 10 ? 'M1 / C1' : 'M2 / C2')
+        : supplyType === 'Bifásico'
+          ? (demandKVA <= 15 ? 'B1 / C2' : 'B2 / C3')
+          : (demandKVA <= 25 ? 'T1 / C3' : 'T2 / C4');
+    const groundRodsCount = supplyType === 'Trifásico' ? 3 : 2;
+    const postSteelDaN = mainCableRow.section >= 16 ? 'Poste Concreto/Aço 7,0m - 200 daN' : 'Poste Concreto/Aço 7,0m - 100 daN';
 
     return {
       phases: {
@@ -519,8 +640,18 @@ window.NBR5410 = (function () {
       mainCurrentA: +mainCurrentA.toFixed(1),
       mainBreakerA,
       mainCableMm2: mainCableRow.section,
+      mainConduitMm,
       idrMainA: mainBreakerA <= 40 ? 40 : 63,
-      unbalancePercent
+      unbalancePercent,
+      entrance: {
+        entranceType,
+        utilityName,
+        categoryCode,
+        groundRodsCount,
+        postSpec: postSteelDaN,
+        ramalSectionMm2: Math.max(10, mainCableRow.section),
+        conduitMm: Math.max(32, mainConduitMm)
+      }
     };
   }
 
@@ -635,24 +766,32 @@ window.NBR5410 = (function () {
       }
     });
 
-    // 2. Eletrodutos e Caixas de Passagem
+    // 2. Eletrodutos, Eletrocalhas e Caixas de Passagem
     let conduit20m = 0;
     let conduit25m = 0;
+    let conduit32m = 0;
+    let trayMeters = 0;
     project.conduits.forEach(cd => {
       const p1 = project.points.find(p => p.id === cd.fromId);
       const p2 = project.points.find(p => p.id === cd.toId);
       const dist = p1 && p2 ? Math.hypot(p2.x - p1.x, p2.y - p1.y) + 1.8 : 4.5;
-      if (Number(cd.diameterMm) >= 25) {
+      if (cd.mounting === 'eletrocalha' || cd.tray) {
+        trayMeters += dist;
+      } else if (Number(cd.diameterMm) >= 32) {
+        conduit32m += dist;
+      } else if (Number(cd.diameterMm) >= 25) {
         conduit25m += dist;
       } else {
         conduit20m += dist;
       }
     });
-    conduit20m = Math.max(25, Math.ceil(conduit20m * 1.1));
+    conduit20m = Math.max(15, Math.ceil(conduit20m * 1.1));
     conduit25m = Math.ceil(conduit25m * 1.1);
+    conduit32m = Math.ceil(conduit32m * 1.1);
+    trayMeters = Math.ceil(trayMeters * 1.1);
 
     items.push({
-      category: 'Eletrodutos e Caixas',
+      category: 'Eletrodutos, Eletrocalhas e Caixas',
       code: 'ELET-20',
       description: 'Eletroduto Corrugado Reforçado PVC Antichama Ø 20mm (3/4")',
       unit: 'm',
@@ -661,7 +800,7 @@ window.NBR5410 = (function () {
     });
     if (conduit25m > 0) {
       items.push({
-        category: 'Eletrodutos e Caixas',
+        category: 'Eletrodutos, Eletrocalhas e Caixas',
         code: 'ELET-25',
         description: 'Eletroduto Corrugado Reforçado PVC Antichama Ø 25mm (1")',
         unit: 'm',
@@ -669,16 +808,45 @@ window.NBR5410 = (function () {
         unitPrice: 4.80
       });
     }
+    if (conduit32m > 0) {
+      items.push({
+        category: 'Eletrodutos, Eletrocalhas e Caixas',
+        code: 'ELET-32',
+        description: 'Eletroduto Rígido/Corrugado PVC Pesado Ø 32mm (1.1/4")',
+        unit: 'm',
+        qty: conduit32m,
+        unitPrice: 7.90
+      });
+    }
+    if (trayMeters > 0) {
+      items.push({
+        category: 'Eletrodutos, Eletrocalhas e Caixas',
+        code: 'CALHA-100X50',
+        description: 'Eletrocalha Lisa/Perfurada Galvanizada 100x50mm com Tampa e Suportes',
+        unit: 'm',
+        qty: trayMeters,
+        unitPrice: 34.50
+      });
+    }
 
     const lightsCount = project.points.filter(p => p.category === 'light').length;
-    const tugsLowCount = project.points.filter(p => p.category === 'tug' && Number(p.powerVA) <= 100).length;
-    const tugsHighCount = project.points.filter(p => p.category === 'tug' && Number(p.powerVA) > 100).length;
+    const tugSimplesCount = project.points.filter(p => p.category === 'tug' && p.subtype !== 'tug_dupla' && p.subtype !== 'tug_tripla' && Number(p.powerVA) <= 100).length;
+    const tugDuplaCount = project.points.filter(p => p.category === 'tug' && p.subtype === 'tug_dupla').length;
+    const tugTriplaCount = project.points.filter(p => p.category === 'tug' && p.subtype === 'tug_tripla').length;
+    const tugsHighCount = project.points.filter(p => p.category === 'tug' && p.subtype !== 'tug_dupla' && p.subtype !== 'tug_tripla' && Number(p.powerVA) > 100).length;
     const tuesCount = project.points.filter(p => p.category === 'tue').length;
     const switchesCount = project.points.filter(p => p.category === 'switch').length;
-    const wallBoxesCount = tugsLowCount + tugsHighCount + tuesCount + switchesCount;
+    const sensorsCount = project.points.filter(p => p.category === 'sensor').length;
+    const telecomCount = project.points.filter(p => p.category === 'telecom').length;
+    const bellCount = project.points.filter(p => p.category === 'bell').length;
+    const camCount = project.points.filter(p => p.category === 'camera').length;
+    const jboxCount = project.points.filter(p => p.category === 'jbox').length;
+    const partialBoardsCount = project.points.filter(p => p.category === 'qdc' && p.subtype === 'quadro_parcial').length;
+
+    const wallBoxesCount = tugSimplesCount + tugDuplaCount + tugTriplaCount + tugsHighCount + tuesCount + switchesCount + telecomCount + bellCount;
 
     items.push({
-      category: 'Eletrodutos e Caixas',
+      category: 'Eletrodutos, Eletrocalhas e Caixas',
       code: 'CX-4X2',
       description: 'Caixa de Passagem Embutir PVC 4x2" com Orelhas Reforçadas',
       unit: 'un',
@@ -686,23 +854,53 @@ window.NBR5410 = (function () {
       unitPrice: 3.90
     });
     items.push({
-      category: 'Eletrodutos e Caixas',
+      category: 'Eletrodutos, Eletrocalhas e Caixas',
       code: 'CX-OCT',
       description: 'Caixa Octogonal de Laje/Teto 4x4" Fundo Móvel',
       unit: 'un',
-      qty: Math.max(1, lightsCount),
+      qty: Math.max(1, lightsCount + sensorsCount),
       unitPrice: 5.50
     });
+    if (jboxCount > 0) {
+      items.push({
+        category: 'Eletrodutos, Eletrocalhas e Caixas',
+        code: 'CX-PASS-4X4',
+        description: 'Caixa de Passagem 4x4" / 15x15cm com Tampa Cega Parafusada',
+        unit: 'un',
+        qty: jboxCount,
+        unitPrice: 12.80
+      });
+    }
 
-    // 3. Tomadas, Interruptores e Luminárias
-    if (tugsLowCount > 0) {
+    // 3. Tomadas, Interruptores, Sensores, Telecom, CFTV e Luminárias
+    if (tugSimplesCount > 0) {
       items.push({
         category: 'Tomadas, Interruptores e Iluminação',
         code: 'TOM-10A',
-        description: 'Conjunto Tomada 2P+T 10A 250V NBR 14136 com Placa 4x2"',
+        description: 'Conjunto Tomada Simples 2P+T 10A 250V NBR 14136 com Placa 4x2"',
         unit: 'un',
-        qty: tugsLowCount,
+        qty: tugSimplesCount,
         unitPrice: 16.90
+      });
+    }
+    if (tugDuplaCount > 0) {
+      items.push({
+        category: 'Tomadas, Interruptores e Iluminação',
+        code: 'TOM-DUPLA-10A',
+        description: 'Conjunto Tomada Dupla (2x 2P+T) 10A 250V NBR 14136 com Placa 4x2"',
+        unit: 'un',
+        qty: tugDuplaCount,
+        unitPrice: 27.50
+      });
+    }
+    if (tugTriplaCount > 0) {
+      items.push({
+        category: 'Tomadas, Interruptores e Iluminação',
+        code: 'TOM-TRIPLA-10A',
+        description: 'Conjunto Tomada Tripla (3x 2P+T) 10A 250V NBR 14136 com Placa 4x2"',
+        unit: 'un',
+        qty: tugTriplaCount,
+        unitPrice: 36.90
       });
     }
     if (tugsHighCount + tuesCount > 0) {
@@ -718,11 +916,51 @@ window.NBR5410 = (function () {
     if (switchesCount > 0) {
       items.push({
         category: 'Tomadas, Interruptores e Iluminação',
-        code: 'INT-1S',
-        description: 'Conjunto Interruptor Simples 10A 250V com Placa 4x2"',
+        code: 'INT-MOD',
+        description: 'Conjunto Interruptor (Simples / Duplo / Triplo / Paralelo Three-Way / Four-Way) 10A 250V',
         unit: 'un',
         qty: switchesCount,
-        unitPrice: 15.80
+        unitPrice: 21.80
+      });
+    }
+    if (sensorsCount > 0) {
+      items.push({
+        category: 'Tomadas, Interruptores e Iluminação',
+        code: 'SENS-PRES',
+        description: 'Sensor de Presença Infravermelho 360° Teto/Parede Bivolt c/ Fotocélula',
+        unit: 'un',
+        qty: sensorsCount,
+        unitPrice: 44.90
+      });
+    }
+    if (telecomCount > 0) {
+      items.push({
+        category: 'Telecomunicações, CFTV e Dados',
+        code: 'TOM-RJ45-RJ11',
+        description: 'Conjunto Tomada de Dados RJ45 Cat6 / Voz Telefone RJ11 com Placa 4x2"',
+        unit: 'un',
+        qty: telecomCount,
+        unitPrice: 32.00
+      });
+    }
+    if (bellCount > 0) {
+      items.push({
+        category: 'Telecomunicações, CFTV e Dados',
+        code: 'CAMP-CIG',
+        description: 'Conjunto Campainha Eletrônica / Cigarra Embutir + Pulsador Externo',
+        unit: 'un',
+        qty: bellCount,
+        unitPrice: 29.90
+      });
+    }
+    if (camCount > 0) {
+      items.push({
+        category: 'Telecomunicações, CFTV e Dados',
+        code: 'CAM-IP-POE',
+        description: 'Câmera de Segurança CFTV IP PoE Full HD Infravermelho (Dome/Bullet)',
+        unit: 'un',
+        qty: camCount,
+        unitPrice: 210.00
       });
     }
     if (lightsCount > 0) {
@@ -736,15 +974,33 @@ window.NBR5410 = (function () {
       });
     }
 
-    // 4. Quadro de Distribuição e Proteção DIN
+    // 4. Padrão de Entrada da Concessionária + Quadros de Distribuição e Proteção DIN
+    items.push({
+      category: 'Padrão de Entrada Concessionária',
+      code: `PAD-${board.entrance.categoryCode.replace(/[^A-Z0-9]/g, '')}`,
+      description: `Kit Padrão de Entrada ${board.entrance.entranceType} (${board.entrance.categoryCode}) c/ Caixa Policarbonato, Poste e ${board.entrance.groundRodsCount} Hastes Aterramento Copperweld 2,40m`,
+      unit: 'cj',
+      qty: 1,
+      unitPrice: 890.00
+    });
     items.push({
       category: 'Quadro de Distribuição e Proteção (NBR 5410)',
       code: 'QDC-24DIN',
-      description: 'Quadro de Distribuição Embutir p/ 24 a 36 Disjuntores DIN c/ Barramentos Neutro/Terra',
+      description: 'Quadro de Distribuição Geral (QGBT/QDC) Embutir p/ 24 a 36 Disjuntores DIN c/ Barramentos Neutro/Terra',
       unit: 'un',
       qty: 1,
       unitPrice: 189.00
     });
+    if (partialBoardsCount > 0) {
+      items.push({
+        category: 'Quadro de Distribuição e Proteção (NBR 5410)',
+        code: 'QD-PARCIAL-12',
+        description: 'Quadro de Distribuição Parcial (QD) Embutir p/ 12 a 18 Disjuntores DIN c/ Barramentos',
+        unit: 'un',
+        qty: partialBoardsCount,
+        unitPrice: 118.00
+      });
+    }
     items.push({
       category: 'Quadro de Distribuição e Proteção (NBR 5410)',
       code: `DJ-GERAL-${board.mainBreakerA}`,
@@ -912,6 +1168,9 @@ window.NBR5410 = (function () {
     STANDARD_BREAKERS,
     ensureProjectOpenings,
     getOpeningWorldGeometry,
+    isPointCollidingWithDoorOrOpening,
+    findSafeWallPoint,
+    findSwitchPositionNearRoomDoor,
     calculateRoomNormativeMinimums,
     inspectRoomCompliance,
     autoGenerateNormativePointsAndCircuits,

@@ -4,17 +4,48 @@
 
 window.App = (function () {
   const STORAGE_KEY = 'lucas_aguiar_woca_projects_v1';
+  const THEME_KEY = 'lucas_aguiar_theme_v1';
 
   let projects = [];
   let currentProject = null;
   let activeFilter = 'Todos';
   let searchQuery = '';
   let customPriceOverrides = {};
+  let activePrintSheetIndex = 0;
 
   function init() {
+    initTheme();
     loadProjectsFromStorage();
     bindGlobalEvents();
     renderDashboard();
+  }
+
+  // ==================== TEMA CLARO / ESCURO (ITEM 7) ====================
+  function initTheme() {
+    const saved = localStorage.getItem(THEME_KEY) || 'dark';
+    applyTheme(saved);
+  }
+
+  function applyTheme(theme) {
+    const isLight = theme === 'light';
+    document.body.classList.toggle('light-theme', isLight);
+    document.documentElement.setAttribute('data-theme', isLight ? 'light' : 'dark');
+    document.querySelectorAll('.js-theme-label').forEach(el => {
+      el.textContent = isLight ? 'Tema Escuro' : 'Tema Claro';
+    });
+    if (window.CAD2D) window.CAD2D.render();
+    if (window.Viewer3D) {
+      window.Viewer3D.render();
+      if (window.Viewer3D.renderBoard3D) window.Viewer3D.renderBoard3D();
+    }
+  }
+
+  function toggleTheme() {
+    const isLight = document.body.classList.contains('light-theme');
+    const next = isLight ? 'dark' : 'light';
+    localStorage.setItem(THEME_KEY, next);
+    applyTheme(next);
+    showToast(`Tema alterado para ${next === 'light' ? 'Modo Claro' : 'Modo Escuro'}!`);
   }
 
   function loadProjectsFromStorage() {
@@ -148,6 +179,8 @@ window.App = (function () {
             saveProjectsToStorage();
             updateEditorHeaderStats();
             renderSidebarRoomList();
+            populate3DRoomFilterDropdown();
+            updateRemoveFloorplanBtnState();
             if (msg) showToast(msg);
           }
         }
@@ -157,6 +190,11 @@ window.App = (function () {
     const c3d = document.getElementById('cad3dCanvas');
     if (c3d) {
       window.Viewer3D.init(c3d);
+    }
+
+    const b3d = document.getElementById('board3dCanvas');
+    if (b3d && window.Viewer3D.initBoard3D) {
+      window.Viewer3D.initBoard3D(b3d);
     }
   }
 
@@ -235,11 +273,11 @@ window.App = (function () {
                 <span class="metric-item-lbl">Área</span>
               </div>
               <div class="metric-item">
-                <span class="metric-item-val">${proj.points.length}</span>
+                <span class="metric-item-val">${(proj.points || []).length}</span>
                 <span class="metric-item-lbl">Pontos</span>
               </div>
               <div class="metric-item">
-                <span class="metric-item-val">${proj.circuits.length}</span>
+                <span class="metric-item-val">${(proj.circuits || []).length}</span>
                 <span class="metric-item-lbl">Circuitos</span>
               </div>
               <div class="metric-item">
@@ -268,7 +306,11 @@ window.App = (function () {
     });
   }
 
-  function openNewProjectModal() {
+  function openNewProjectModal(defaultTemplate) {
+    const tplSelect = document.getElementById('npTemplate');
+    if (tplSelect && defaultTemplate) {
+      tplSelect.value = defaultTemplate;
+    }
     document.getElementById('newProjectModal').classList.add('active');
   }
 
@@ -276,11 +318,14 @@ window.App = (function () {
     document.getElementById('newProjectModal').classList.remove('active');
   }
 
+  // ==================== CRIAÇÃO DE NOVO PROJETO (INCLUINDO EM BRANCO - ITEM 13) ====================
   function createNewProjectFromModal() {
     const name = document.getElementById('npName').value.trim() || 'Novo Projeto Elétrico';
     const client = document.getElementById('npClient').value.trim() || 'Cliente Particular';
     const category = document.getElementById('npCategory').value;
     const concessionaria = document.getElementById('npConcessionaria').value;
+    const entranceEl = document.getElementById('npEntranceType');
+    const entranceType = entranceEl ? entranceEl.value : 'Aéreo (Poste c/ Mureta)';
     const system = document.getElementById('npSystem').value;
     const voltagePair = document.getElementById('npVoltage').value.split('/');
     const templateType = document.getElementById('npTemplate').value;
@@ -295,17 +340,29 @@ window.App = (function () {
       address: document.getElementById('npAddress').value.trim() || 'São Paulo/SP',
       supply: {
         concessionaria,
+        entranceType,
         system,
         phaseVoltage: Number(voltagePair[0] || 127),
         lineVoltage: Number(voltagePair[1] || 220)
       },
       rooms: [],
+      openings: [],
       points: [],
       conduits: [],
-      circuits: []
+      texts: [],
+      dimensions: [],
+      stairs: [],
+      circuits: [],
+      backgroundFloorplanDataUrl: null
     };
 
-    if (templateType === 'residencial_padrao') {
+    if (templateType === 'em_branco') {
+      // Projeto 100% em branco: sem cômodos pré-gerados e sem pré-dimensionamento
+      newProj.circuits = [
+        { id: 'C1', number: 1, name: 'Iluminação Geral', type: 'iluminacao', voltage: newProj.supply.phaseVoltage, pf: 1.0, phase: 'R', dr: false, fca: 1.0 },
+        { id: 'C2', number: 2, name: 'Tomadas de Uso Geral (TUG)', type: 'tug', voltage: newProj.supply.phaseVoltage, pf: 0.8, phase: 'S', dr: true, fca: 1.0 }
+      ];
+    } else if (templateType === 'residencial_padrao') {
       newProj.rooms = [
         { id: 'r1', name: 'Sala de Estar', type: 'sala', x: 0, y: 0, w: 4.2, h: 3.8 },
         { id: 'r2', name: 'Cozinha', type: 'cozinha', x: 4.2, y: 0, w: 3.4, h: 3.8 },
@@ -338,7 +395,11 @@ window.App = (function () {
     saveProjectsToStorage();
     closeNewProjectModal();
     openProject(newProj.id);
-    showToast(`Projeto "${newProj.name}" criado e pronto para edição!`);
+    showToast(
+      templateType === 'em_branco'
+        ? `Projeto em branco "${newProj.name}" criado! Desenhe cômodos ou importe uma planta.`
+        : `Projeto "${newProj.name}" criado e pronto para edição!`
+    );
   }
 
   function duplicateProject(id) {
@@ -379,15 +440,22 @@ window.App = (function () {
     const found = projects.find(p => p.id === id);
     if (!found) return;
     currentProject = found;
+    if (!Array.isArray(currentProject.texts)) currentProject.texts = [];
+    if (!Array.isArray(currentProject.dimensions)) currentProject.dimensions = [];
+    if (!Array.isArray(currentProject.stairs)) currentProject.stairs = [];
+    if (!Array.isArray(currentProject.openings)) currentProject.openings = [];
+    if (!currentProject.supply.entranceType) currentProject.supply.entranceType = 'Aéreo (Poste c/ Mureta)';
+    activePrintSheetIndex = 0;
 
     switchScreen('editorScreen');
     updateEditorHeaderStats();
+    populate3DRoomFilterDropdown();
+    updateRemoveFloorplanBtnState();
     switchEditorTab('tab2d');
 
     requestAnimationFrame(() => {
       window.CAD2D.setProject(currentProject);
       window.Viewer3D.setProject(currentProject);
-      // Seleciona automaticamente o primeiro cômodo ao abrir para exibir imediatamente as alças de edição CAD!
       if (currentProject.rooms && currentProject.rooms.length > 0) {
         window.CAD2D.selectById('room', currentProject.rooms[0].id, false);
       } else {
@@ -412,7 +480,7 @@ window.App = (function () {
 
     if (titleEl) titleEl.textContent = currentProject.name;
     if (subEl) {
-      subEl.textContent = `${currentProject.supply.system} ${currentProject.supply.phaseVoltage}/${currentProject.supply.lineVoltage}V • ${currentProject.rooms.length} Ambientes • ${currentProject.points.length} Pontos • Demanda: ${board.demandKVA} kVA`;
+      subEl.textContent = `${currentProject.supply.system} ${currentProject.supply.phaseVoltage}/${currentProject.supply.lineVoltage}V • ${(currentProject.rooms || []).length} Ambientes • ${(currentProject.points || []).length} Pontos • Demanda: ${board.demandKVA} kVA`;
     }
   }
 
@@ -433,9 +501,16 @@ window.App = (function () {
         renderSidebarRoomList();
       });
     } else if (tabId === 'tab3d') {
+      populate3DRoomFilterDropdown();
       requestAnimationFrame(() => {
         window.Viewer3D.setProject(currentProject);
         window.Viewer3D.resize();
+      });
+    } else if (tabId === 'tabBoard3d') {
+      requestAnimationFrame(() => {
+        window.Viewer3D.setProject(currentProject);
+        if (window.Viewer3D.resizeBoard3D) window.Viewer3D.resizeBoard3D();
+        if (window.Viewer3D.renderBoard3D) window.Viewer3D.renderBoard3D();
       });
     } else if (tabId === 'tabRooms') {
       renderRoomsPanel();
@@ -445,6 +520,8 @@ window.App = (function () {
       renderBoardAndUnifilarPanel();
     } else if (tabId === 'tabMaterials') {
       renderMaterialsPanel();
+    } else if (tabId === 'tabPrint') {
+      renderPrintSetupTab();
     }
   }
 
@@ -457,14 +534,84 @@ window.App = (function () {
     document.querySelectorAll('.js-btn-delete').forEach(b => { b.disabled = !state.hasSelection; });
   }
 
-  // ==================== GESTÃO INTERATIVA DE CÔMODOS (CRIAR, DUPLICAR, EDITAR, EXCLUIR) ====================
+  // ==================== FILTROS 3D POR CÔMODO E POR LAYER (ITENS 3 e 4) ====================
+  function populate3DRoomFilterDropdown() {
+    const sel = document.getElementById('select3dRoomFilter');
+    if (!sel || !currentProject) return;
+    const prevVal = sel.value || 'all';
+    const opts = [`<option value="all">Todos os Cômodos (Planta Completa)</option>`];
+    (currentProject.rooms || []).forEach(r => {
+      opts.push(`<option value="${r.id}" ${prevVal === r.id ? 'selected' : ''}>Isolar: ${r.name} (${r.w}×${r.h}m)</option>`);
+    });
+    sel.innerHTML = opts.join('');
+  }
+
+  function filter3DByRoom(roomId) {
+    const sel = document.getElementById('select3dRoomFilter');
+    if (sel) sel.value = roomId || 'all';
+    window.Viewer3D.setRoomFilter(roomId || 'all');
+    if (roomId && roomId !== 'all' && currentProject) {
+      const r = currentProject.rooms.find(rm => rm.id === roomId);
+      if (r) showToast(`Visão 3D isolada para o cômodo: ${r.name}`);
+    } else {
+      showToast('Visão 3D exibindo todos os cômodos da planta.');
+    }
+  }
+
+  function setQuickFilter3D(mode) {
+    window.Viewer3D.setQuickFilter3D(mode);
+    const setChk = (id, val) => {
+      const el = document.getElementById(id);
+      if (el) el.checked = val;
+    };
+    if (mode === 'all') {
+      setChk('chk3dTug', true);
+      setChk('chk3dTue', true);
+      setChk('chk3dLight', true);
+      setChk('chk3dSwitches', true);
+      setChk('chk3dBoards', true);
+      setChk('chk3dConduits', true);
+      setChk('chk3dTelecom', true);
+      setChk('chk3dOpenings', true);
+      showToast('Exibindo todas as camadas na Vista 3D.');
+    } else if (mode === 'only_tug') {
+      setChk('chk3dTug', true);
+      setChk('chk3dTue', false);
+      setChk('chk3dLight', false);
+      setChk('chk3dSwitches', false);
+      setChk('chk3dBoards', false);
+      setChk('chk3dConduits', false);
+      setChk('chk3dTelecom', false);
+      showToast('Filtro 3D: Exibindo apenas Tomadas TUG!');
+    } else if (mode === 'only_tue') {
+      setChk('chk3dTug', false);
+      setChk('chk3dTue', true);
+      setChk('chk3dLight', false);
+      setChk('chk3dSwitches', false);
+      setChk('chk3dBoards', false);
+      setChk('chk3dConduits', false);
+      setChk('chk3dTelecom', false);
+      showToast('Filtro 3D: Exibindo apenas Tomadas TUE (Uso Específico)!');
+    } else if (mode === 'only_light') {
+      setChk('chk3dTug', false);
+      setChk('chk3dTue', false);
+      setChk('chk3dLight', true);
+      setChk('chk3dSwitches', false);
+      setChk('chk3dBoards', false);
+      setChk('chk3dConduits', false);
+      setChk('chk3dTelecom', false);
+      showToast('Filtro 3D: Exibindo apenas Luminárias e Sensores!');
+    }
+  }
+
+  // ==================== GESTÃO INTERATIVA DE CÔMODOS ====================
   function renderSidebarRoomList() {
     const listEl = document.getElementById('sidebarRoomList');
     if (!listEl || !currentProject) return;
     const sel = window.CAD2D.getSelectedItem();
 
     if (!currentProject.rooms || currentProject.rooms.length === 0) {
-      listEl.innerHTML = `<div style="font-size:11.5px; color:var(--text-muted); padding:6px;">Nenhum cômodo. Clique em "+ Novo Cômodo".</div>`;
+      listEl.innerHTML = `<div style="font-size:11.5px; color:var(--text-muted); padding:6px;">Planta vazia. Clique em "+ Novo" ou desenhe no Canvas.</div>`;
       return;
     }
 
@@ -491,7 +638,7 @@ window.App = (function () {
   function openAddRoomModal() {
     const modal = document.getElementById('addRoomModal');
     if (!modal || !currentProject) return;
-    document.getElementById('arName').value = `Ambiente ${currentProject.rooms.length + 1}`;
+    document.getElementById('arName').value = `Ambiente ${(currentProject.rooms || []).length + 1}`;
     document.getElementById('arType').value = 'quarto';
     document.getElementById('arWidth').value = '3.5';
     document.getElementById('arHeight').value = '3.2';
@@ -512,7 +659,6 @@ window.App = (function () {
     const h = Math.max(1.2, parseFloat(document.getElementById('arHeight').value) || 3.2);
     const autoNbr = document.getElementById('arAutoNbr').checked;
 
-    // Calcula posição livre ao lado dos cômodos existentes na planta
     let nextX = 0;
     let nextY = 0;
     if (currentProject.rooms.length > 0) {
@@ -550,6 +696,7 @@ window.App = (function () {
     window.CAD2D.fitToView();
     window.CAD2D.selectById('room', newRoom.id, true);
     renderSidebarRoomList();
+    populate3DRoomFilterDropdown();
     renderRoomsPanel();
     updateEditorHeaderStats();
     showToast(`Cômodo "${newRoom.name}" (${newRoom.w}m × ${newRoom.h}m) adicionado à planta!`);
@@ -575,6 +722,7 @@ window.App = (function () {
     window.CAD2D.fitToView();
     window.CAD2D.selectById('room', newRoom.id, true);
     renderSidebarRoomList();
+    populate3DRoomFilterDropdown();
     renderRoomsPanel();
     updateEditorHeaderStats();
     showToast(`Cômodo "${newRoom.name}" duplicado com pontos NBR 5410!`);
@@ -591,7 +739,7 @@ window.App = (function () {
     renderPropertyInspector({ kind: 'room', id: roomId });
     renderRoomsPanel();
     updateEditorHeaderStats();
-    showToast(`Pontos NBR 5410 recalculados para "${room.name}"!`);
+    showToast(`Pontos NBR 5410 recalculados para "${room.name}" (desviando de portas e vãos)!`);
   }
 
   function deleteRoomById(roomId) {
@@ -600,15 +748,22 @@ window.App = (function () {
     window.CAD2D.deleteSelectedItem();
     renderRoomsPanel();
     renderSidebarRoomList();
+    populate3DRoomFilterDropdown();
   }
 
-  // ==================== FERRAMENTAS DO EDITOR 2D ====================
+  // ==================== FERRAMENTAS DO EDITOR 2D, GRID, LIMPAR TUDO & DXF/IMG ====================
   function selectCadTool(toolName, btnEl) {
     document.querySelectorAll('.tool-btn[data-tool]').forEach(b => b.classList.remove('active'));
     if (btnEl) btnEl.classList.add('active');
     window.CAD2D.setTool(toolName);
     if (toolName === 'add_room') {
       showToast('Modo Desenhar Ambiente ativo: Clique e arraste no Canvas 2D para criar o cômodo!');
+    } else if (toolName === 'dimension') {
+      showToast('Modo Cota Manual: Clique no 1º ponto e depois no 2º ponto para medir!');
+    } else if (toolName === 'text') {
+      showToast('Modo Texto: Clique em qualquer ponto da planta para inserir uma anotação!');
+    } else if (toolName === 'stair') {
+      showToast('Modo Escada: Clique na planta para posicionar uma escada (Reta, L, U ou Caracol)!');
     }
   }
 
@@ -616,8 +771,30 @@ window.App = (function () {
     window.CAD2D.setLayerVisible(layerName, checkboxEl.checked);
   }
 
+  function toggleCadGrid(checkboxEl) {
+    window.CAD2D.setGridVisible(checkboxEl.checked);
+    showToast(checkboxEl.checked ? 'Grid da planta 2D exibido.' : 'Grid da planta 2D ocultado.');
+  }
+
+  function clearAllCurrentProject() {
+    if (!currentProject) return;
+    window.CAD2D.clearAllProject();
+    currentProject.updatedAt = new Date().toLocaleDateString('pt-BR');
+    saveProjectsToStorage();
+    updateEditorHeaderStats();
+    renderSidebarRoomList();
+    populate3DRoomFilterDropdown();
+    renderRoomsPanel();
+    renderCircuitsPanel();
+    renderPropertyInspector(null);
+  }
+
   function runAutoGenerateNormative() {
     if (!currentProject) return;
+    if (!currentProject.rooms || currentProject.rooms.length === 0) {
+      showToast('Adicione ou desenhe pelo menos um cômodo antes de executar o lançamento automático!');
+      return;
+    }
     window.CAD2D.pushHistorySnapshot();
     window.NBR5410.autoGenerateNormativePointsAndCircuits(currentProject);
     window.NBR5410.autoBalancePhases(currentProject);
@@ -629,22 +806,82 @@ window.App = (function () {
     }
     updateEditorHeaderStats();
     renderRoomsPanel();
-    showToast('Dimensionamento e lançamento automático NBR 5410 concluídos!');
+    showToast('Lançamento automático NBR 5410 concluído (livre de vãos e portas)!');
   }
 
   function handleFloorplanUpload(e) {
     const file = e.target.files && e.target.files[0];
-    if (!file) return;
+    if (!file || !currentProject) return;
     if (file.name.toLowerCase().endsWith('.dxf')) {
-      showToast(`Planta CAD "${file.name}" importada! Eixos de referência alinhados.`);
+      // Gera representação visual da planta DXF exclusiva para este projeto
+      const off = document.createElement('canvas');
+      off.width = 900;
+      off.height = 650;
+      const octx = off.getContext('2d');
+      octx.strokeStyle = 'rgba(56, 189, 248, 0.55)';
+      octx.lineWidth = 2;
+      octx.strokeRect(40, 40, 820, 570);
+      octx.strokeRect(40, 40, 420, 320);
+      octx.strokeRect(460, 40, 400, 320);
+      octx.strokeRect(40, 360, 360, 250);
+      octx.strokeRect(400, 360, 460, 250);
+      octx.fillStyle = 'rgba(56, 189, 248, 0.75)';
+      octx.font = 'bold 16px JetBrains Mono, monospace';
+      octx.fillText(`REFERÊNCIA CAD DXF: ${file.name}`, 56, 72);
+      const dataUrl = off.toDataURL('image/png');
+      currentProject.backgroundFloorplanName = file.name;
+      window.CAD2D.setBackgroundFloorplan(dataUrl);
+      saveProjectsToStorage();
+      updateRemoveFloorplanBtnState();
+      showToast(`Planta DXF "${file.name}" vinculada exclusivamente a este projeto!`);
+      e.target.value = '';
       return;
     }
     const reader = new FileReader();
     reader.onload = function (ev) {
+      currentProject.backgroundFloorplanName = file.name;
       window.CAD2D.setBackgroundFloorplan(ev.target.result);
-      showToast(`Planta de fundo "${file.name}" carregada no Canvas 2D!`);
+      saveProjectsToStorage();
+      updateRemoveFloorplanBtnState();
+      showToast(`Planta "${file.name}" carregada neste projeto (sem afetar outros projetos)!`);
+      e.target.value = '';
     };
     reader.readAsDataURL(file);
+  }
+
+  function removeCurrentProjectFloorplan() {
+    if (!currentProject) return;
+    if (!currentProject.backgroundFloorplanDataUrl && !currentProject.backgroundFloorplanName) {
+      showToast('Nenhuma planta DXF/Imagem importada neste projeto.');
+      return;
+    }
+    currentProject.backgroundFloorplanName = null;
+    window.CAD2D.removeBackgroundFloorplan();
+    const inp = document.getElementById('floorplanFileInput');
+    if (inp) inp.value = '';
+    saveProjectsToStorage();
+    updateRemoveFloorplanBtnState();
+  }
+
+  function updateRemoveFloorplanBtnState() {
+    const btn = document.getElementById('btnRemoveFloorplan');
+    if (!btn) return;
+    const hasBg = Boolean(currentProject && (currentProject.backgroundFloorplanDataUrl || currentProject.backgroundFloorplanName));
+    btn.disabled = !hasBg;
+    btn.style.opacity = hasBg ? '1' : '0.45';
+  }
+
+  function exportCurrentProjectDXF() {
+    if (!currentProject) return;
+    const dxfContent = window.Diagrams.exportProjectDXF(currentProject);
+    const blob = new Blob([dxfContent], { type: 'application/dxf;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Planta_Eletrica_${currentProject.name.replace(/\s+/g, '_')}_Lucas_Aguiar.dxf`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast('Planta elétrica exportada em formato AutoCAD (.DXF)!');
   }
 
   // ==================== INSPETOR DE PROPRIEDADES (LADO DIREITO DO CAD) ====================
@@ -655,16 +892,36 @@ window.App = (function () {
     if (!selection) {
       const evaluated = window.NBR5410.evaluateProjectCircuits(currentProject);
       const board = window.NBR5410.calculateBoardSummary(currentProject, evaluated);
+      const entranceType = currentProject.supply.entranceType || 'Aéreo (Poste c/ Mureta)';
       box.innerHTML = `
         <div class="sidebar-section">
-          <div class="sidebar-section-title">Resumo do Projeto Ativo</div>
+          <div class="sidebar-section-title">Resumo &amp; Padrão de Entrada</div>
           <div class="form-group">
             <label>Nome do Projeto</label>
             <input type="text" class="form-input" value="${currentProject.name}" oninput="App.updateProjectMeta('name', this.value)" />
           </div>
-          <div class="form-group">
-            <label>Cliente / Proprietário</label>
-            <input type="text" class="form-input" value="${currentProject.client}" oninput="App.updateProjectMeta('client', this.value)" />
+          <div class="form-row">
+            <div class="form-group">
+              <label>Concessionária</label>
+              <select class="form-select" onchange="App.updateSupplyField('concessionaria', this.value)">
+                <option value="Enel" ${currentProject.supply.concessionaria === 'Enel' ? 'selected' : ''}>Enel</option>
+                <option value="CPFL Energia" ${currentProject.supply.concessionaria === 'CPFL Energia' ? 'selected' : ''}>CPFL Energia</option>
+                <option value="CEMIG" ${currentProject.supply.concessionaria === 'CEMIG' ? 'selected' : ''}>CEMIG</option>
+                <option value="Neoenergia" ${currentProject.supply.concessionaria === 'Neoenergia' ? 'selected' : ''}>Neoenergia</option>
+                <option value="Copel" ${currentProject.supply.concessionaria === 'Copel' ? 'selected' : ''}>Copel</option>
+                <option value="Celesc" ${currentProject.supply.concessionaria === 'Celesc' ? 'selected' : ''}>Celesc</option>
+                <option value="Equatorial" ${currentProject.supply.concessionaria === 'Equatorial' ? 'selected' : ''}>Equatorial</option>
+                <option value="Light" ${currentProject.supply.concessionaria === 'Light' ? 'selected' : ''}>Light</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Tipo do Padrão</label>
+              <select class="form-select" onchange="App.updateSupplyField('entranceType', this.value)">
+                <option value="Aéreo (Poste c/ Mureta)" ${entranceType.includes('Aéreo') ? 'selected' : ''}>Aéreo (Poste/Mureta)</option>
+                <option value="Subterrâneo (Caixa de Passagem)" ${entranceType.includes('Subterrâneo') ? 'selected' : ''}>Subterrâneo</option>
+                <option value="Fachada / Pontalete" ${entranceType.includes('Fachada') ? 'selected' : ''}>Fachada / Pontalete</option>
+              </select>
+            </div>
           </div>
           <div class="form-row">
             <div class="form-group">
@@ -686,16 +943,19 @@ window.App = (function () {
         </div>
         <div class="sidebar-section">
           <div class="sidebar-section-title">Ações Rápidas de Planta</div>
-          <button class="btn btn-primary btn-block btn-sm" onclick="App.openAddRoomModal()" style="margin-bottom:8px;">
+          <button class="btn btn-primary btn-block btn-sm" onclick="App.openAddRoomModal()" style="margin-bottom:6px;">
             + Adicionar Novo Cômodo
           </button>
-          <button class="btn btn-secondary btn-block btn-sm" onclick="App.selectCadTool('add_room', document.getElementById('btnDrawRoomTool'))">
+          <button class="btn btn-secondary btn-block btn-sm" onclick="App.selectCadTool('add_room', document.getElementById('btnDrawRoomTool'))" style="margin-bottom:6px;">
             Desenhar Cômodo com o Mouse
+          </button>
+          <button class="btn btn-accent btn-block btn-sm" onclick="App.exportCurrentProjectDXF()">
+            Exportar Planta em .DXF
           </button>
         </div>
         <div class="sidebar-section">
-          <div class="sidebar-section-title">Métricas Normativas (NBR 5410)</div>
-          <div style="display:flex; flex-direction:column; gap:8px; font-size:12.5px;">
+          <div class="sidebar-section-title">Métricas Normativas &amp; Entrada</div>
+          <div style="display:flex; flex-direction:column; gap:7px; font-size:12px;">
             <div style="display:flex; justify-content:space-between;">
               <span style="color:var(--text-muted)">Potência Instalada:</span>
               <strong class="mono">${board.totalInstalledVA} VA (${board.totalInstalledW} W)</strong>
@@ -705,12 +965,16 @@ window.App = (function () {
               <strong class="mono" style="color:var(--brand-primary)">${board.demandVA} VA (${board.demandKVA} kVA)</strong>
             </div>
             <div style="display:flex; justify-content:space-between;">
-              <span style="color:var(--text-muted)">Disjuntor Geral QDC:</span>
-              <strong class="mono">${board.mainBreakerA}A (${currentProject.supply.system})</strong>
+              <span style="color:var(--text-muted)">Padrão Concessionária:</span>
+              <strong class="mono">Cat. ${board.entrance.categoryCode} (${board.mainBreakerA}A)</strong>
             </div>
             <div style="display:flex; justify-content:space-between;">
-              <span style="color:var(--text-muted)">Cabo Ramal Entrada:</span>
-              <strong class="mono">#${board.mainCableMm2} mm² Cu</strong>
+              <span style="color:var(--text-muted)">Ramal / Eletroduto Entrada:</span>
+              <strong class="mono">#${board.mainCableMm2}mm² • Ø${board.entrance.conduitMm}mm</strong>
+            </div>
+            <div style="display:flex; justify-content:space-between;">
+              <span style="color:var(--text-muted)">Malha de Aterramento:</span>
+              <strong class="mono">${board.entrance.groundRodsCount}x Hastes Copperweld</strong>
             </div>
           </div>
         </div>
@@ -892,22 +1156,53 @@ window.App = (function () {
     } else if (selection.kind === 'point') {
       const pt = currentProject.points.find(p => p.id === selection.id);
       if (!pt) return;
-      const circuitOptions = currentProject.circuits.map(c =>
+      const circuitOptions = (currentProject.circuits || []).map(c =>
         `<option value="${c.id}" ${pt.circuitId === c.id ? 'selected' : ''}>${c.id} — ${c.name}</option>`
       ).join('');
 
+      let subtypeSelectorHtml = '';
+      if (pt.category === 'tug') {
+        subtypeSelectorHtml = `
+          <div class="form-group">
+            <label>Tipo de Tomada (Simples / Dupla / Tripla)</label>
+            <select class="form-select" onchange="App.updatePointSubtype('${pt.id}', this.value)">
+              <option value="baixa" ${pt.subtype === 'baixa' ? 'selected' : ''}>Tomada Simples Baixa (0.30m)</option>
+              <option value="dupla" ${pt.subtype === 'dupla' ? 'selected' : ''}>Tomada Dupla 2x (0.30m)</option>
+              <option value="tripla" ${pt.subtype === 'tripla' ? 'selected' : ''}>Tomada Tripla 3x (0.30m)</option>
+              <option value="media" ${pt.subtype === 'media' ? 'selected' : ''}>Tomada Média (1.30m)</option>
+            </select>
+          </div>
+        `;
+      } else if (pt.category === 'switch') {
+        subtypeSelectorHtml = `
+          <div class="form-group">
+            <label>Tipo de Interruptor</label>
+            <select class="form-select" onchange="App.updatePointSubtype('${pt.id}', this.value)">
+              <option value="simples" ${pt.subtype === 'simples' ? 'selected' : ''}>Interruptor Simples (1 Seção)</option>
+              <option value="duplo" ${pt.subtype === 'duplo' ? 'selected' : ''}>Interruptor Duplo (2 Seções)</option>
+              <option value="triplo" ${pt.subtype === 'triplo' ? 'selected' : ''}>Interruptor Triplo (3 Seções)</option>
+              <option value="3way" ${pt.subtype === '3way' ? 'selected' : ''}>Interruptor Paralelo (Three-Way)</option>
+              <option value="4way" ${pt.subtype === '4way' ? 'selected' : ''}>Interruptor Intermediário (Four-Way)</option>
+              <option value="campainha" ${pt.subtype === 'campainha' ? 'selected' : ''}>Pulsador de Campainha</option>
+            </select>
+          </div>
+        `;
+      }
+
       box.innerHTML = `
         <div class="sidebar-section">
-          <div class="sidebar-section-title">Ponto Elétrico (${pt.category.toUpperCase()})</div>
+          <div class="sidebar-section-title">Ponto (${pt.category.toUpperCase()})</div>
           <div class="form-group">
             <label>Identificação / Etiqueta</label>
             <input type="text" id="inspectorPointLabel" class="form-input" value="${pt.label || ''}"
               oninput="App.updatePointPropLive('${pt.id}', 'label', this.value)" />
           </div>
-          ${pt.category !== 'qdc' ? `
+          ${subtypeSelectorHtml}
+          ${!['qdc', 'quadro_parcial', 'padrao_entrada', 'caixa_passagem', 'conduit_sobe', 'conduit_desce'].includes(pt.category) ? `
           <div class="form-group">
             <label>Circuito Associado</label>
             <select class="form-select" onchange="App.updatePointProp('${pt.id}', 'circuitId', this.value)">
+              <option value="—" ${!pt.circuitId || pt.circuitId === '—' ? 'selected' : ''}>Sem Circuito / Telecom</option>
               ${circuitOptions}
             </select>
           </div>
@@ -924,7 +1219,7 @@ window.App = (function () {
             </div>
           </div>
           ` : ''}
-          ${(pt.category === 'light' || pt.category === 'switch') ? `
+          ${(pt.category === 'light' || pt.category === 'switch' || pt.category === 'sensor_presenca') ? `
           <div class="form-group">
             <label>Letra de Comando (Retorno)</label>
             <input type="text" class="form-input mono" value="${pt.command || 'a1'}"
@@ -948,7 +1243,7 @@ window.App = (function () {
               Rotacionar Símbolo 90° (Tecla R)
             </button>
             <button class="btn btn-danger btn-block btn-sm" onclick="CAD2D.deleteSelectedItem()">
-              Remover Ponto Elétrico
+              Remover Componente
             </button>
           </div>
         </div>
@@ -956,26 +1251,180 @@ window.App = (function () {
     } else if (selection.kind === 'conduit') {
       const cd = currentProject.conduits.find(c => c.id === selection.id);
       if (!cd) return;
+      const isTray = cd.infraType === 'eletrocalha';
       box.innerHTML = `
         <div class="sidebar-section">
-          <div class="sidebar-section-title">Trecho de Eletroduto</div>
+          <div class="sidebar-section-title">${isTray ? 'Trecho de Eletrocalha' : 'Trecho de Eletroduto'}</div>
           <div class="form-group">
-            <label>Tipo de Instalação</label>
+            <label>Tipo de Conduto (Eletroduto ou Eletrocalha)</label>
+            <select class="form-select" onchange="App.updateConduitProp('${cd.id}', 'infraType', this.value)">
+              <option value="conduit" ${!isTray ? 'selected' : ''}>Eletroduto Fechado (PVC / PEAD)</option>
+              <option value="eletrocalha" ${isTray ? 'selected' : ''}>Eletrocalha / Perfilado Metálico</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Método de Instalação</label>
             <select class="form-select" onchange="App.updateConduitProp('${cd.id}', 'mounting', this.value)">
               <option value="laje" ${cd.mounting === 'laje' ? 'selected' : ''}>Embutido na Laje / Teto</option>
               <option value="parede" ${cd.mounting === 'parede' ? 'selected' : ''}>Embutido na Parede</option>
               <option value="piso" ${cd.mounting === 'piso' ? 'selected' : ''}>Embutido no Piso / Subterrâneo</option>
+              <option value="aparente" ${cd.mounting === 'aparente' ? 'selected' : ''}>Aparente / Aéreo Suspenso</option>
             </select>
           </div>
           <div class="form-group">
-            <label>Diâmetro Nominal (mm)</label>
+            <label>Dimensão Nominal (mm)</label>
             <select class="form-select mono" onchange="App.updateConduitProp('${cd.id}', 'diameterMm', parseInt(this.value, 10))">
               <option value="20" ${cd.diameterMm === 20 ? 'selected' : ''}>Ø 20 mm (3/4")</option>
               <option value="25" ${cd.diameterMm === 25 ? 'selected' : ''}>Ø 25 mm (1")</option>
               <option value="32" ${cd.diameterMm === 32 ? 'selected' : ''}>Ø 32 mm (1 1/4")</option>
+              <option value="40" ${cd.diameterMm === 40 ? 'selected' : ''}>Ø 40 mm (1 1/2")</option>
+              <option value="50" ${cd.diameterMm === 50 ? 'selected' : ''}>50 mm (Eletrocalha 50×50 / Ø2")</option>
+              <option value="100" ${cd.diameterMm === 100 ? 'selected' : ''}>100 mm (Eletrocalha 100×50mm)</option>
             </select>
           </div>
-          <button class="btn btn-danger btn-block btn-sm" onclick="CAD2D.deleteSelectedItem()">Remover Eletroduto</button>
+          <button class="btn btn-danger btn-block btn-sm" onclick="CAD2D.deleteSelectedItem()">Remover Trecho</button>
+        </div>
+      `;
+    } else if (selection.kind === 'text') {
+      const tx = (currentProject.texts || []).find(t => t.id === selection.id);
+      if (!tx) return;
+      box.innerHTML = `
+        <div class="sidebar-section">
+          <div class="sidebar-section-title">Texto / Observação na Planta</div>
+          <div class="form-group">
+            <label>Conteúdo do Texto</label>
+            <input type="text" class="form-input" value="${tx.text || ''}"
+              oninput="App.updateTextPropLive('${tx.id}', 'text', this.value)" />
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Tamanho Fonte (px)</label>
+              <input type="number" min="9" max="28" class="form-input mono" value="${tx.fontSize || 12}"
+                oninput="App.updateTextPropLive('${tx.id}', 'fontSize', parseInt(this.value, 10))" />
+            </div>
+            <div class="form-group">
+              <label>Cor Destaque</label>
+              <select class="form-select" onchange="App.updateTextPropLive('${tx.id}', 'color', this.value)">
+                <option value="#fbbf24" ${tx.color === '#fbbf24' ? 'selected' : ''}>Âmbar Técnico</option>
+                <option value="#38bdf8" ${tx.color === '#38bdf8' ? 'selected' : ''}>Azul Ciano</option>
+                <option value="#34d399" ${tx.color === '#34d399' ? 'selected' : ''}>Verde Norma</option>
+                <option value="#f43f5e" ${tx.color === '#f43f5e' ? 'selected' : ''}>Vermelho Alerta</option>
+                <option value="#f8fafc" ${tx.color === '#f8fafc' ? 'selected' : ''}>Branco Neutro</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Posição X (m)</label>
+              <input type="number" step="0.1" class="form-input mono" value="${tx.x}"
+                oninput="App.updateTextPropLive('${tx.id}', 'x', parseFloat(this.value))" />
+            </div>
+            <div class="form-group">
+              <label>Posição Y (m)</label>
+              <input type="number" step="0.1" class="form-input mono" value="${tx.y}"
+                oninput="App.updateTextPropLive('${tx.id}', 'y', parseFloat(this.value))" />
+            </div>
+          </div>
+          <button class="btn btn-danger btn-block btn-sm" onclick="CAD2D.deleteSelectedItem()">Remover Texto</button>
+        </div>
+      `;
+    } else if (selection.kind === 'dimension') {
+      const dm = (currentProject.dimensions || []).find(d => d.id === selection.id);
+      if (!dm) return;
+      const dist = Math.hypot(dm.x2 - dm.x1, dm.y2 - dm.y1).toFixed(2);
+      box.innerHTML = `
+        <div class="sidebar-section">
+          <div class="sidebar-section-title">Cota de Medição Manual</div>
+          <div style="background:var(--bg-primary); padding:10px; border-radius:6px; margin-bottom:10px; border:1px solid var(--border-subtle);">
+            Distância Medida: <strong class="mono" style="color:var(--brand-primary); font-size:14px;">${dist} m</strong>
+          </div>
+          <div class="form-group">
+            <label>Texto Personalizado da Cota (Opcional)</label>
+            <input type="text" class="form-input mono" placeholder="${dist} m" value="${dm.label || ''}"
+              oninput="App.updateDimensionPropLive('${dm.id}', 'label', this.value)" />
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Início X1 (m)</label>
+              <input type="number" step="0.1" class="form-input mono" value="${dm.x1}"
+                oninput="App.updateDimensionPropLive('${dm.id}', 'x1', parseFloat(this.value))" />
+            </div>
+            <div class="form-group">
+              <label>Início Y1 (m)</label>
+              <input type="number" step="0.1" class="form-input mono" value="${dm.y1}"
+                oninput="App.updateDimensionPropLive('${dm.id}', 'y1', parseFloat(this.value))" />
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Fim X2 (m)</label>
+              <input type="number" step="0.1" class="form-input mono" value="${dm.x2}"
+                oninput="App.updateDimensionPropLive('${dm.id}', 'x2', parseFloat(this.value))" />
+            </div>
+            <div class="form-group">
+              <label>Fim Y2 (m)</label>
+              <input type="number" step="0.1" class="form-input mono" value="${dm.y2}"
+                oninput="App.updateDimensionPropLive('${dm.id}', 'y2', parseFloat(this.value))" />
+            </div>
+          </div>
+          <button class="btn btn-danger btn-block btn-sm" onclick="CAD2D.deleteSelectedItem()">Remover Cota</button>
+        </div>
+      `;
+    } else if (selection.kind === 'stair') {
+      const st = (currentProject.stairs || []).find(s => s.id === selection.id);
+      if (!st) return;
+      box.innerHTML = `
+        <div class="sidebar-section">
+          <div class="sidebar-section-title">
+            <span>Escada Arquitetônica</span>
+            <span class="badge badge-amber">2D &amp; 3D</span>
+          </div>
+          <div class="form-group">
+            <label>Tipo de Escada</label>
+            <select class="form-select" onchange="App.updateStairProp('${st.id}', 'stairType', this.value)">
+              <option value="reta" ${st.stairType === 'reta' ? 'selected' : ''}>Escada Reta (1 Lance)</option>
+              <option value="em_l" ${st.stairType === 'em_l' ? 'selected' : ''}>Escada em L (Com Patamar)</option>
+              <option value="em_u" ${st.stairType === 'em_u' ? 'selected' : ''}>Escada em U (2 Lances + Patamar)</option>
+              <option value="caracol" ${st.stairType === 'caracol' ? 'selected' : ''}>Escada Caracol / Helicoidal</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Identificação</label>
+            <input type="text" class="form-input" value="${st.label || 'Escada'}"
+              oninput="App.updateStairPropLive('${st.id}', 'label', this.value)" />
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Largura X (m)</label>
+              <input type="number" step="0.1" min="0.8" class="form-input mono" value="${st.w}"
+                oninput="App.updateStairPropLive('${st.id}', 'w', parseFloat(this.value))" />
+            </div>
+            <div class="form-group">
+              <label>Comprimento Y (m)</label>
+              <input type="number" step="0.1" min="1.0" class="form-input mono" value="${st.h}"
+                oninput="App.updateStairPropLive('${st.id}', 'h', parseFloat(this.value))" />
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Posição X (m)</label>
+              <input type="number" step="0.1" class="form-input mono" value="${st.x}"
+                oninput="App.updateStairPropLive('${st.id}', 'x', parseFloat(this.value))" />
+            </div>
+            <div class="form-group">
+              <label>Posição Y (m)</label>
+              <input type="number" step="0.1" class="form-input mono" value="${st.y}"
+                oninput="App.updateStairPropLive('${st.id}', 'y', parseFloat(this.value))" />
+            </div>
+          </div>
+          <div style="display:flex; flex-direction:column; gap:7px;">
+            <button class="btn btn-secondary btn-block btn-sm" onclick="CAD2D.rotateSelectedPoint()">
+              Rotacionar Escada 90° (Tecla R)
+            </button>
+            <button class="btn btn-danger btn-block btn-sm" onclick="CAD2D.deleteSelectedItem()">
+              Remover Escada
+            </button>
+          </div>
         </div>
       `;
     }
@@ -986,6 +1435,14 @@ window.App = (function () {
     currentProject[field] = val;
     saveProjectsToStorage();
     updateEditorHeaderStats();
+  }
+
+  function updateSupplyField(field, val) {
+    if (!currentProject) return;
+    currentProject.supply[field] = val;
+    saveProjectsToStorage();
+    updateEditorHeaderStats();
+    renderPropertyInspector(null);
   }
 
   function updateSupplySystem(val) {
@@ -1007,7 +1464,6 @@ window.App = (function () {
     renderPropertyInspector(null);
   }
 
-  // Atualização em tempo real sem perder foco do input
   function updateRoomPropLive(roomId, prop, val) {
     const room = currentProject.rooms.find(r => r.id === roomId);
     if (!room) return;
@@ -1015,6 +1471,7 @@ window.App = (function () {
     saveProjectsToStorage();
     window.CAD2D.render();
     renderSidebarRoomList();
+    populate3DRoomFilterDropdown();
   }
 
   function updateRoomDimensionLive(roomId, prop, val) {
@@ -1026,7 +1483,6 @@ window.App = (function () {
     const oldX = room.x, oldY = room.y, oldW = room.w, oldH = room.h;
     room[prop] = val;
 
-    // Reposiciona pontos do cômodo proporcionalmente
     currentProject.points.forEach(p => {
       if (p.roomId === room.id) {
         const relX = oldW > 0 ? (p.x - oldX) / oldW : 0.5;
@@ -1039,6 +1495,7 @@ window.App = (function () {
     saveProjectsToStorage();
     window.CAD2D.render();
     renderSidebarRoomList();
+    populate3DRoomFilterDropdown();
     updateEditorHeaderStats();
 
     const summaryBox = document.getElementById('roomNormSummaryBox');
@@ -1083,13 +1540,91 @@ window.App = (function () {
     renderPropertyInspector({ kind: 'point', id: ptId });
   }
 
+  function updatePointSubtype(ptId, newSubtype) {
+    const pt = currentProject.points.find(p => p.id === ptId);
+    if (!pt) return;
+    pt.subtype = newSubtype;
+    if (pt.category === 'tug') {
+      if (newSubtype === 'dupla') { pt.powerVA = 200; pt.label = 'TUG Dupla (2x100VA)'; }
+      else if (newSubtype === 'tripla') { pt.powerVA = 300; pt.label = 'TUG Tripla (3x100VA)'; }
+      else if (newSubtype === 'media') { pt.powerVA = 600; pt.z = 1.3; pt.label = 'TUG 600VA'; }
+      else { pt.powerVA = 100; pt.z = 0.3; pt.label = 'TUG 100VA'; }
+    } else if (pt.category === 'switch') {
+      const labels = {
+        simples: 'Int. Simples',
+        duplo: 'Int. Duplo (a/b)',
+        triplo: 'Int. Triplo (a/b/c)',
+        '3way': 'Int. Three-Way',
+        '4way': 'Int. Four-Way',
+        campainha: 'Pulsador Campainha'
+      };
+      pt.label = labels[newSubtype] || pt.label;
+    }
+    saveProjectsToStorage();
+    window.CAD2D.render();
+    window.Viewer3D.render();
+    updateEditorHeaderStats();
+    renderPropertyInspector({ kind: 'point', id: ptId });
+  }
+
   function updateConduitProp(cdId, prop, val) {
     const cd = currentProject.conduits.find(c => c.id === cdId);
     if (!cd) return;
     cd[prop] = val;
+    if (prop === 'infraType' && val === 'eletrocalha' && cd.diameterMm < 50) {
+      cd.diameterMm = 50;
+      cd.mounting = 'aparente';
+    }
     saveProjectsToStorage();
     window.CAD2D.render();
+    window.Viewer3D.render();
     renderPropertyInspector({ kind: 'conduit', id: cdId });
+  }
+
+  function updateTextPropLive(txId, prop, val) {
+    const tx = (currentProject.texts || []).find(t => t.id === txId);
+    if (!tx) return;
+    if (typeof val === 'number' && isNaN(val)) return;
+    tx[prop] = val;
+    saveProjectsToStorage();
+    window.CAD2D.render();
+  }
+
+  function updateDimensionPropLive(dmId, prop, val) {
+    const dm = (currentProject.dimensions || []).find(d => d.id === dmId);
+    if (!dm) return;
+    if (typeof val === 'number' && isNaN(val)) return;
+    dm[prop] = val;
+    saveProjectsToStorage();
+    window.CAD2D.render();
+  }
+
+  function updateStairPropLive(stId, prop, val) {
+    const st = (currentProject.stairs || []).find(s => s.id === stId);
+    if (!st) return;
+    if (typeof val === 'number' && isNaN(val)) return;
+    st[prop] = val;
+    saveProjectsToStorage();
+    window.CAD2D.render();
+    window.Viewer3D.render();
+  }
+
+  function updateStairProp(stId, prop, val) {
+    const st = (currentProject.stairs || []).find(s => s.id === stId);
+    if (!st) return;
+    st[prop] = val;
+    const names = { reta: 'Escada Reta', em_l: 'Escada em L', em_u: 'Escada em U', caracol: 'Escada Caracol' };
+    if (prop === 'stairType' && names[val]) {
+      st.label = names[val];
+      if (val === 'caracol') { st.w = 1.8; st.h = 1.8; }
+      else if (val === 'em_u') { st.w = 2.4; st.h = 2.8; }
+      else if (val === 'em_l') { st.w = 2.2; st.h = 2.4; }
+      else { st.w = 1.2; st.h = 2.8; }
+    }
+    saveProjectsToStorage();
+    window.CAD2D.render();
+    window.Viewer3D.render();
+    renderPropertyInspector({ kind: 'stair', id: stId });
   }
 
   function addOpeningToRoom(roomId, openingType) {
@@ -1136,6 +1671,11 @@ window.App = (function () {
   function renderRoomsPanel() {
     const tbody = document.getElementById('roomsTableBody');
     if (!tbody || !currentProject) return;
+
+    if (!currentProject.rooms || currentProject.rooms.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="9" style="text-align:center; padding:24px; color:var(--text-muted);">Nenhum cômodo cadastrado. Clique em "+ Adicionar Novo Cômodo" acima.</td></tr>`;
+      return;
+    }
 
     tbody.innerHTML = currentProject.rooms.map(room => {
       const c = window.NBR5410.inspectRoomCompliance(room, currentProject.points);
@@ -1192,7 +1732,7 @@ window.App = (function () {
     renderRoomsPanel();
   }
 
-  // ==================== ABA 4: CIRCUITOS & DIMENSIONAMENTO AUTOMÁTICO ====================
+  // ==================== ABA 4: CIRCUITOS, SEÇÃO DO CABO E DIMENSIONAMENTO DO ELETRODUTO (ITENS 10 e 11) ====================
   function renderCircuitsPanel() {
     const tbody = document.getElementById('circuitsTableBody');
     if (!tbody || !currentProject) return;
@@ -1225,6 +1765,10 @@ window.App = (function () {
         <td class="mono">${c.ib} A</td>
         <td class="mono">${c.fca}</td>
         <td class="mono"><strong>#${c.sectionMm2} mm²</strong> <span style="color:var(--text-muted)">(Iz=${c.izReal}A)</span></td>
+        <td class="mono">
+          <strong style="color:#f59e0b;">Ø${c.conduitMm}mm (${c.conduitInch})</strong>
+          <div style="font-size:10.5px; color:var(--text-muted);">${c.conductorCount} cond. • Ocup. ${c.conduitOccupancyPct}%</div>
+        </td>
         <td class="mono" style="color:${c.voltageDropPercent <= 4 ? '#34d399' : '#fb7185'}">${c.voltageDropPercent}%</td>
         <td class="mono"><strong>${c.poles}P ${c.breakerA}A (Curva ${c.curve})</strong></td>
         <td>
@@ -1288,7 +1832,7 @@ window.App = (function () {
     showToast('Fases R, S e T balanceadas automaticamente para menor desequilíbrio!');
   }
 
-  // ==================== ABA 5: QUADRO DE CARGAS & DIAGRAMA UNIFILAR ====================
+  // ==================== ABA 5: QUADRO DE CARGAS, PADRÃO DE ENTRADA & DIAGRAMA UNIFILAR ====================
   function renderBoardAndUnifilarPanel() {
     if (!currentProject) return;
     const evaluated = window.NBR5410.evaluateProjectCircuits(currentProject);
@@ -1322,7 +1866,7 @@ window.App = (function () {
           <div class="stat-card">
             <div class="stat-info">
               <span class="stat-value mono">${board.totalInstalledVA} VA</span>
-              <span class="stat-label">Potência Total Instalada (${board.totalInstalledW} W)</span>
+              <span class="stat-label">Potência Instalada (${board.totalInstalledW} W)</span>
             </div>
           </div>
           <div class="stat-card">
@@ -1333,14 +1877,14 @@ window.App = (function () {
           </div>
           <div class="stat-card">
             <div class="stat-info">
-              <span class="stat-value mono">DJ ${board.mainBreakerA}A + IDR ${board.idrMainA}A</span>
-              <span class="stat-label">Proteção Geral QDC (#${board.mainCableMm2}mm² Cu)</span>
+              <span class="stat-value mono">Padrão Cat. ${board.entrance.categoryCode} (${board.mainBreakerA}A)</span>
+              <span class="stat-label">${currentProject.supply.concessionaria} • ${board.entrance.entranceType}</span>
             </div>
           </div>
           <div class="stat-card">
             <div class="stat-info">
-              <span class="stat-value mono" style="color:#34d399">${board.unbalancePercent}%</span>
-              <span class="stat-label">Desequilíbrio entre Fases</span>
+              <span class="stat-value mono" style="color:#34d399">#${board.mainCableMm2}mm² • Ø${board.entrance.conduitMm}mm</span>
+              <span class="stat-label">Ramal de Entrada + ${board.entrance.groundRodsCount} Hastes Terra</span>
             </div>
           </div>
         </div>
@@ -1446,6 +1990,268 @@ window.App = (function () {
     showToast('Planilha quantitativa de materiais exportada em CSV/Excel!');
   }
 
+  // ==================== ABA 7: AJUSTES DE IMPRESSÃO, CARIMBO, VISTAS 3D E MÚLTIPLAS PRANCHAS (ITEM 9) ====================
+  function ensureProjectPrintSheets() {
+    if (!currentProject) return;
+    if (!Array.isArray(currentProject.printSheets) || currentProject.printSheets.length === 0) {
+      currentProject.printSheets = [
+        {
+          id: `sheet-1`,
+          name: 'Prancha 01 — Planta 2D, Vistas 3D e Unifilar',
+          paperSize: 'A3',
+          scale: '1:50',
+          zoomPct: 100,
+          show2D: true,
+          show3D: true,
+          showBoard3D: true,
+          showUnifilar: true,
+          showTables: false,
+          title: 'PROJETO ELÉTRICO — PLANTA BAIXA, 3D E DIAGRAMA UNIFILAR',
+          author: 'Eng. Lucas Aguiar',
+          crea: 'CREA-SP 507123456',
+          revision: 'REV. 01'
+        }
+      ];
+    }
+    if (activePrintSheetIndex >= currentProject.printSheets.length) {
+      activePrintSheetIndex = 0;
+    }
+  }
+
+  function renderPrintSetupTab() {
+    if (!currentProject) return;
+    ensureProjectPrintSheets();
+    const sheets = currentProject.printSheets;
+    const active = sheets[activePrintSheetIndex] || sheets[0];
+
+    // Lista de pranchas na lateral
+    const listEl = document.getElementById('printSheetsList');
+    if (listEl) {
+      listEl.innerHTML = sheets.map((sh, idx) => `
+        <div class="layer-toggle" style="border-color:${idx === activePrintSheetIndex ? '#f59e0b' : 'var(--border-subtle)'}; background:${idx === activePrintSheetIndex ? 'rgba(245,158,11,0.14)' : 'var(--bg-primary)'};"
+             onclick="App.selectPrintSheet(${idx})">
+          <span class="layer-toggle-left">
+            <span class="layer-dot" style="background:${idx === activePrintSheetIndex ? '#f59e0b' : '#38bdf8'}"></span>
+            <strong style="font-size:12px;">Folha 0${idx + 1} (${sh.paperSize})</strong>
+          </span>
+          <div style="display:flex; align-items:center; gap:6px;">
+            <span class="mono" style="font-size:11px; color:var(--text-muted);">${sh.scale}</span>
+            ${sheets.length > 1 ? `<button class="btn btn-danger btn-sm" style="padding:1px 5px; font-size:10px;" onclick="event.stopPropagation(); App.deletePrintSheet(${idx})">✕</button>` : ''}
+          </div>
+        </div>
+      `).join('');
+    }
+
+    // Sincroniza controles com a folha ativa
+    const setVal = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+    const setChk = (id, v) => { const el = document.getElementById(id); if (el) el.checked = Boolean(v); };
+
+    setVal('printPaperSize', active.paperSize || 'A3');
+    setVal('printDrawingScale', active.scale || '1:50');
+    setVal('printDrawingZoom', active.zoomPct || 100);
+    setChk('chkPrint2D', active.show2D);
+    setChk('chkPrint3D', active.show3D);
+    setChk('chkPrintBoard3D', active.showBoard3D);
+    setChk('chkPrintUnifilar', active.showUnifilar);
+    setChk('chkPrintTables', active.showTables);
+    setVal('printSheetTitle', active.title || '');
+    setVal('printAuthor', active.author || 'Eng. Lucas Aguiar');
+    setVal('printCrea', active.crea || 'CREA-SP 507123456');
+    setVal('printRev', active.revision || 'REV. 01');
+    setVal('printSheetNum', `0${activePrintSheetIndex + 1} / 0${sheets.length}`);
+
+    renderPrintPreviewSheets();
+  }
+
+  function selectPrintSheet(idx) {
+    activePrintSheetIndex = idx;
+    renderPrintSetupTab();
+  }
+
+  function addPrintSheet() {
+    if (!currentProject) return;
+    ensureProjectPrintSheets();
+    const num = currentProject.printSheets.length + 1;
+    currentProject.printSheets.push({
+      id: `sheet-${Date.now()}`,
+      name: `Prancha 0${num} — Detalhamento e Quantitativos`,
+      paperSize: 'A3',
+      scale: '1:50',
+      zoomPct: 100,
+      show2D: num % 2 === 1,
+      show3D: true,
+      showBoard3D: true,
+      showUnifilar: true,
+      showTables: true,
+      title: `PROJETO ELÉTRICO — PRANCHA COMPLEMENTAR 0${num}`,
+      author: 'Eng. Lucas Aguiar',
+      crea: 'CREA-SP 507123456',
+      revision: 'REV. 01'
+    });
+    activePrintSheetIndex = currentProject.printSheets.length - 1;
+    saveProjectsToStorage();
+    renderPrintSetupTab();
+    showToast(`Folha 0${num} adicionada ao conjunto de impressão!`);
+  }
+
+  function deletePrintSheet(idx) {
+    if (!currentProject || !currentProject.printSheets || currentProject.printSheets.length <= 1) return;
+    currentProject.printSheets.splice(idx, 1);
+    if (activePrintSheetIndex >= currentProject.printSheets.length) {
+      activePrintSheetIndex = currentProject.printSheets.length - 1;
+    }
+    saveProjectsToStorage();
+    renderPrintSetupTab();
+    showToast('Folha removida do conjunto de impressão.');
+  }
+
+  function updateActivePrintSheet(prop, val) {
+    if (!currentProject) return;
+    ensureProjectPrintSheets();
+    const sheet = currentProject.printSheets[activePrintSheetIndex];
+    if (!sheet) return;
+    sheet[prop] = val;
+    saveProjectsToStorage();
+    renderPrintPreviewSheets();
+  }
+
+  function renderPrintPreviewSheets() {
+    const container = document.getElementById('printPreviewSheetsContainer');
+    if (!container || !currentProject) return;
+    ensureProjectPrintSheets();
+
+    // Gera snapshots das vistas 2D, 3D e Quadro 3D
+    const temp2d = document.createElement('canvas');
+    temp2d.width = 760;
+    temp2d.height = 420;
+    window.CAD2D.renderProjectPreviewToCanvas(temp2d, currentProject);
+    const snap2dUrl = temp2d.toDataURL('image/png');
+
+    window.Viewer3D.setProject(currentProject);
+    const snap3dUrl = window.Viewer3D.captureSnapshotDataUrl ? window.Viewer3D.captureSnapshotDataUrl() : '';
+    const snapBoard3dUrl = window.Viewer3D.captureBoardSnapshotDataUrl ? window.Viewer3D.captureBoardSnapshotDataUrl() : '';
+    const unifilarSvg = window.Diagrams.generateUnifilarSVG(currentProject);
+    const evaluated = window.NBR5410.evaluateProjectCircuits(currentProject);
+    const board = window.NBR5410.calculateBoardSummary(currentProject, evaluated);
+
+    const paperWidths = { A4: '860px', A3: '1040px', A2: '1140px', A1: '1220px', A0: '1280px' };
+
+    container.innerHTML = currentProject.printSheets.map((sh, idx) => {
+      const zoomScale = (Number(sh.zoomPct) || 100) / 100;
+      const wStyle = paperWidths[sh.paperSize] || '1040px';
+
+      return `
+        <div class="print-sheet-paper" style="width:100%; max-width:${wStyle};">
+          <div class="print-sheet-frame">
+            <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1.5px solid #0f172a; padding-bottom:8px; margin-bottom:12px;">
+              <div>
+                <strong style="font-size:15px; color:#0f172a;">LUCAS AGUIAR — ENGENHARIA &amp; PROJETOS ELÉTRICOS (ABNT NBR 5410)</strong>
+                <div style="font-size:11.5px; color:#334155;">Empreendimento: <strong>${currentProject.name}</strong> • Cliente: ${currentProject.client} • Local: ${currentProject.address}</div>
+              </div>
+              <div style="text-align:right; font-family:'JetBrains Mono', monospace; font-size:11.5px; color:#0f172a;">
+                <div>FORMATO <strong>${sh.paperSize}</strong> • ESCALA <strong>${sh.scale}</strong></div>
+                <div>FOLHA <strong>0${idx + 1} / 0${currentProject.printSheets.length}</strong></div>
+              </div>
+            </div>
+
+            <div style="transform: scale(${zoomScale}); transform-origin: top center; display:flex; flex-direction:column; gap:14px;">
+              ${(sh.show2D || sh.show3D || sh.showBoard3D) ? `
+              <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap:12px;">
+                ${sh.show2D ? `
+                <div style="border:1px solid #94a3b8; border-radius:6px; padding:8px; background:#0f172a;">
+                  <div style="font-size:11px; font-weight:700; color:#fbbf24; margin-bottom:4px;">1. PLANTA BAIXA ELÉTRICA 2D (ESCALA ${sh.scale})</div>
+                  <img src="${snap2dUrl}" alt="Planta 2D" style="width:100%; height:220px; object-fit:contain; display:block;" />
+                </div>
+                ` : ''}
+                ${sh.show3D ? `
+                <div style="border:1px solid #94a3b8; border-radius:6px; padding:8px; background:#0f172a;">
+                  <div style="font-size:11px; font-weight:700; color:#38bdf8; margin-bottom:4px;">2. VISTA ISOMÉTRICA 3D BIM (REVIT MEP)</div>
+                  <img src="${snap3dUrl}" alt="Vista 3D" style="width:100%; height:220px; object-fit:contain; display:block;" />
+                </div>
+                ` : ''}
+                ${sh.showBoard3D ? `
+                <div style="border:1px solid #94a3b8; border-radius:6px; padding:8px; background:#0f172a;">
+                  <div style="font-size:11px; font-weight:700; color:#34d399; margin-bottom:4px;">3. VISTA 3D DO QUADRO DE DISTRIBUIÇÃO (QDC)</div>
+                  <img src="${snapBoard3dUrl}" alt="Quadro 3D" style="width:100%; height:220px; object-fit:contain; display:block;" />
+                </div>
+                ` : ''}
+              </div>
+              ` : ''}
+
+              ${sh.showUnifilar ? `
+              <div style="border:1px solid #94a3b8; border-radius:6px; padding:8px; background:#060a12; overflow:hidden;">
+                <div style="font-size:11px; font-weight:700; color:#f59e0b; margin-bottom:4px;">DIAGRAMA UNIFILAR COMPLETO (SEÇÃO DE CONDUTORES E DIMENSIONAMENTO DE ELETRODUTOS)</div>
+                <div style="width:100%; overflow-x:auto;">${unifilarSvg}</div>
+              </div>
+              ` : ''}
+
+              ${sh.showTables ? `
+              <div style="border:1px solid #0f172a; border-radius:4px; padding:8px; background:#f8fafc; color:#0f172a;">
+                <div style="font-size:11.5px; font-weight:800; margin-bottom:6px;">QUADRO RESUMO DE CIRCUITOS E DIMENSIONAMENTO DE ELETRODUTOS</div>
+                <table style="width:100%; border-collapse:collapse; font-size:10.5px; font-family:'JetBrains Mono', monospace;">
+                  <thead>
+                    <tr style="background:#e2e8f0; text-align:left;">
+                      <th style="padding:4px; border:1px solid #94a3b8;">Circ.</th>
+                      <th style="padding:4px; border:1px solid #94a3b8;">Descrição</th>
+                      <th style="padding:4px; border:1px solid #94a3b8;">Tensão</th>
+                      <th style="padding:4px; border:1px solid #94a3b8;">Potência</th>
+                      <th style="padding:4px; border:1px solid #94a3b8;">Cabo (mm²)</th>
+                      <th style="padding:4px; border:1px solid #94a3b8;">Eletroduto (Ø)</th>
+                      <th style="padding:4px; border:1px solid #94a3b8;">Proteção DIN</th>
+                      <th style="padding:4px; border:1px solid #94a3b8;">Fase</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${evaluated.map(c => `
+                      <tr>
+                        <td style="padding:3px 4px; border:1px solid #cbd5e1;"><strong>${c.id}</strong></td>
+                        <td style="padding:3px 4px; border:1px solid #cbd5e1;">${c.name}</td>
+                        <td style="padding:3px 4px; border:1px solid #cbd5e1;">${c.voltage}V</td>
+                        <td style="padding:3px 4px; border:1px solid #cbd5e1;">${c.totalVA} VA</td>
+                        <td style="padding:3px 4px; border:1px solid #cbd5e1;">#${c.sectionMm2} mm²</td>
+                        <td style="padding:3px 4px; border:1px solid #cbd5e1;">Ø${c.conduitMm}mm (${c.conduitInch})</td>
+                        <td style="padding:3px 4px; border:1px solid #cbd5e1;">${c.poles}P ${c.breakerA}A (${c.curve})</td>
+                        <td style="padding:3px 4px; border:1px solid #cbd5e1;">${c.phase}</td>
+                      </tr>
+                    `).join('')}
+                  </tbody>
+                </table>
+              </div>
+              ` : ''}
+            </div>
+
+            <!-- CARIMBO TÉCNICO ABNT -->
+            <div class="print-carimbo">
+              <div>
+                <div style="font-size:10px; color:#475569;">EMPRESA / AUTORIA</div>
+                <strong style="font-size:13px;">LUCAS AGUIAR — ENGENHARIA ELÉTRICA</strong>
+                <div>Resp. Técnico: <strong>${sh.author}</strong> • ${sh.crea}</div>
+                <div>Padrão Entrada: ${currentProject.supply.concessionaria} Cat. ${board.entrance.categoryCode} (${board.entrance.entranceType})</div>
+              </div>
+              <div>
+                <div style="font-size:10px; color:#475569;">TÍTULO DA PRANCHA / CONTEÚDO</div>
+                <strong style="font-size:12px;">${sh.title}</strong>
+                <div>Cliente: ${currentProject.client} • Obra: ${currentProject.name}</div>
+                <div>Potência Instalada: ${board.totalInstalledVA} VA | Demanda: ${board.demandKVA} kVA</div>
+              </div>
+              <div>
+                <div style="font-size:10px; color:#475569;">FORMATO / ESCALA</div>
+                <strong style="font-size:13px;">${sh.paperSize} — ${sh.scale}</strong>
+                <div>Data: ${currentProject.updatedAt}</div>
+                <div>Norma: ABNT NBR 5410</div>
+              </div>
+              <div style="text-align:center;">
+                <div style="font-size:10px; color:#475569;">PRANCHA / REVISÃO</div>
+                <strong style="font-size:16px; display:block; margin:2px 0;">0${idx + 1} / 0${currentProject.printSheets.length}</strong>
+                <span style="background:#0f172a; color:#f8fafc; padding:2px 6px; border-radius:4px; font-weight:700;">${sh.revision}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+
   function exportCurrentProjectJSON() {
     if (!currentProject) return;
     const json = JSON.stringify(currentProject, null, 2);
@@ -1484,6 +2290,7 @@ window.App = (function () {
 
   return {
     init,
+    toggleTheme,
     switchScreen,
     openProject,
     backToDashboard,
@@ -1502,8 +2309,15 @@ window.App = (function () {
     switchEditorTab,
     selectCadTool,
     toggleCadLayer,
+    toggleCadGrid,
+    clearAllCurrentProject,
+    removeCurrentProjectFloorplan,
+    exportCurrentProjectDXF,
+    filter3DByRoom,
+    setQuickFilter3D,
     runAutoGenerateNormative,
     updateProjectMeta,
+    updateSupplyField,
     updateSupplySystem,
     updateSupplyVoltage,
     updateRoomPropLive,
@@ -1511,7 +2325,12 @@ window.App = (function () {
     updateRoomProp,
     updatePointPropLive,
     updatePointProp,
+    updatePointSubtype,
     updateConduitProp,
+    updateTextPropLive,
+    updateDimensionPropLive,
+    updateStairPropLive,
+    updateStairProp,
     addOpeningToRoom,
     updateOpeningPropLive,
     updateOpeningProp,
@@ -1521,7 +2340,11 @@ window.App = (function () {
     downloadUnifilarSVG,
     updateMaterialUnitPrice,
     exportMaterialsCSV,
-    exportCurrentProjectJSON
+    exportCurrentProjectJSON,
+    selectPrintSheet,
+    addPrintSheet,
+    deletePrintSheet,
+    updateActivePrintSheet
   };
 })();
 

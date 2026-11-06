@@ -17,14 +17,14 @@ window.CAD2D = (function () {
   let offsetY = 75;
 
   // Estado de ferramentas
-  // select, pan, add_room, door, window, opening, qdc, light, switch, tug_baixa, tug_media, tue_alta, conduit
   let activeTool = 'select';
-  let selectedItem = null;   // { kind: 'room'|'point'|'conduit'|'opening', id: string }
+  let selectedItem = null;   // { kind: 'room'|'point'|'conduit'|'opening'|'text'|'dimension'|'stair', id: string }
   let hoveredPointId = null;
   let hoveredOpeningId = null;
   let hoveredRoomId = null;
   let hoveredHandle = null;  // 'n','s','e','w','nw','ne','sw','se' | 'op_start','op_end'
   let conduitStartPointId = null;
+  let dimensionStartWorld = null;
   let mouseWorldPos = { x: 0, y: 0 };
 
   // Pilhas de Histórico (Reverter / Refazer) e Área de Transferência (Copiar / Colar)
@@ -36,7 +36,7 @@ window.CAD2D = (function () {
 
   // Arraste e Edição
   let isDragging = false;
-  let dragType = null; // 'pan' | 'point' | 'room' | 'resize_room' | 'new_room' | 'opening' | 'resize_opening'
+  let dragType = null; // 'pan' | 'point' | 'room' | 'resize_room' | 'new_room' | 'opening' | 'resize_opening' | 'text' | 'stair'
   let activeResizeHandle = null;
   let dragStartScreen = { x: 0, y: 0 };
   let dragStartWorld = { x: 0, y: 0 };
@@ -45,15 +45,17 @@ window.CAD2D = (function () {
   let dragInitialPos = { x: 0, y: 0 };
   let newRoomPreview = null;
 
-  // Imagem/Planta importada de fundo
+  // Imagem/Planta importada de fundo (por projeto)
   let backgroundOverlayImg = null;
 
   // Camadas visíveis
   const layers = {
+    grid: true,
     architecture: true,
     conduits: true,
     lighting: true,
     outlets: true,
+    telecom: true,
     labels: true,
     dimensions: true
   };
@@ -74,10 +76,21 @@ window.CAD2D = (function () {
   function setProject(proj) {
     project = proj;
     if (project) {
-      window.NBR5410.ensureProjectOpenings(project);
+      if (!project.isBlankProject && project.rooms && project.rooms.length > 0) {
+        window.NBR5410.ensureProjectOpenings(project);
+      }
+      if (!Array.isArray(project.openings)) project.openings = [];
+      if (!Array.isArray(project.texts)) project.texts = [];
+      if (!Array.isArray(project.dimensions)) project.dimensions = [];
+      if (!Array.isArray(project.stairs)) project.stairs = [];
+      // Carrega planta DXF/Imagem exclusiva deste projeto (Item 12)
+      loadProjectBackgroundImage(project.backgroundFloorplanDataUrl || null);
+    } else {
+      backgroundOverlayImg = null;
     }
     selectedItem = null;
     conduitStartPointId = null;
+    dimensionStartWorld = null;
     undoStack = [];
     redoStack = [];
     pendingDragSnapshot = null;
@@ -96,6 +109,9 @@ window.CAD2D = (function () {
       points: project.points || [],
       conduits: project.conduits || [],
       circuits: project.circuits || [],
+      texts: project.texts || [],
+      dimensions: project.dimensions || [],
+      stairs: project.stairs || [],
       selectedItem
     });
   }
@@ -108,6 +124,9 @@ window.CAD2D = (function () {
     project.points = data.points || [];
     project.conduits = data.conduits || [];
     project.circuits = data.circuits || [];
+    project.texts = data.texts || [];
+    project.dimensions = data.dimensions || [];
+    project.stairs = data.stairs || [];
     selectedItem = data.selectedItem || null;
   }
 
@@ -374,6 +393,7 @@ window.CAD2D = (function () {
   function setTool(toolName) {
     activeTool = toolName;
     conduitStartPointId = null;
+    dimensionStartWorld = null;
     updateCursor();
     if (onToolChange) onToolChange(toolName);
     render();
@@ -383,7 +403,7 @@ window.CAD2D = (function () {
     if (!canvas) return;
     if (activeTool === 'pan') {
       canvas.style.cursor = 'grab';
-    } else if (['add_room', 'door', 'window', 'opening', 'qdc', 'light', 'switch', 'tug_baixa', 'tug_media', 'tue_alta', 'conduit'].includes(activeTool)) {
+    } else if (activeTool !== 'select') {
       canvas.style.cursor = 'crosshair';
     } else if (hoveredHandle) {
       const cursorMap = {
@@ -413,7 +433,12 @@ window.CAD2D = (function () {
     render();
   }
 
-  function setBackgroundFloorplan(dataUrl) {
+  function setGridVisible(visible) {
+    layers.grid = Boolean(visible);
+    render();
+  }
+
+  function loadProjectBackgroundImage(dataUrl) {
     if (!dataUrl) {
       backgroundOverlayImg = null;
       render();
@@ -425,6 +450,46 @@ window.CAD2D = (function () {
       render();
     };
     img.src = dataUrl;
+  }
+
+  function setBackgroundFloorplan(dataUrl, fileName = 'Planta Importada') {
+    if (project) {
+      project.backgroundFloorplanDataUrl = dataUrl || null;
+      project.backgroundFloorplanName = dataUrl ? fileName : null;
+    }
+    loadProjectBackgroundImage(dataUrl);
+  }
+
+  function removeBackgroundFloorplan() {
+    if (project) {
+      project.backgroundFloorplanDataUrl = null;
+      project.backgroundFloorplanName = null;
+    }
+    backgroundOverlayImg = null;
+    onProjectMutate('Planta DXF/Imagem removida deste projeto');
+    render();
+  }
+
+  // Botão Limpar Tudo: remove todos os cômodos, tomadas, iluminação, eletrodutos, aberturas, textos, cotas e escadas (Item 2)
+  function clearAllProject() {
+    if (!project) return;
+    pushHistorySnapshot();
+    project.rooms = [];
+    project.openings = [];
+    project.points = [];
+    project.conduits = [];
+    project.circuits = [];
+    project.texts = [];
+    project.dimensions = [];
+    project.stairs = [];
+    project.isBlankProject = true;
+    selectedItem = null;
+    conduitStartPointId = null;
+    dimensionStartWorld = null;
+    onSelectionChange(null);
+    notifyStateChange();
+    onProjectMutate('Planta completamente limpa (Cômodos, Tomadas, Iluminação e Eletrodutos removidos)');
+    render();
   }
 
   function resize() {
@@ -801,6 +866,15 @@ window.CAD2D = (function () {
     render();
   }
 
+  const POINT_TOOLS = [
+    'qdc', 'quadro_parcial', 'padrao_entrada',
+    'light', 'sensor_presenca',
+    'switch', 'int_duplo', 'int_triplo', 'int_3way', 'int_4way', 'int_campainha',
+    'tug_baixa', 'tug_media', 'tug_dupla', 'tug_tripla', 'tue_alta',
+    'tomada_rede', 'tomada_telefone', 'campainha', 'camera_cftv',
+    'caixa_passagem', 'conduit_sobe', 'conduit_desce'
+  ];
+
   function onMouseDown(e) {
     if (!project) return;
     const rect = canvas.getBoundingClientRect();
@@ -844,31 +918,109 @@ window.CAD2D = (function () {
       return;
     }
 
-    // 4. Traçar Eletroduto
-    if (activeTool === 'conduit') {
+    // 3b. Inserir Texto / Observação na Planta (Item 15)
+    if (activeTool === 'text') {
+      pushHistorySnapshot();
+      if (!Array.isArray(project.texts)) project.texts = [];
+      const newTx = {
+        id: `txt-${Date.now()}`,
+        x: snap(world.x, 0.1),
+        y: snap(world.y, 0.1),
+        text: 'Observação Técnica / Nota',
+        fontSize: 12,
+        color: '#fde047'
+      };
+      project.texts.push(newTx);
+      selectedItem = { kind: 'text', id: newTx.id };
+      setTool('select');
+      onSelectionChange(selectedItem);
+      notifyStateChange();
+      onProjectMutate('Texto/Observação adicionado à planta');
+      render();
+      return;
+    }
+
+    // 3c. Traçar Cota Manual entre 2 pontos (Item 16)
+    if (activeTool === 'dimension') {
+      const ptWorld = { x: snap(world.x, 0.05), y: snap(world.y, 0.05) };
+      if (!dimensionStartWorld) {
+        dimensionStartWorld = ptWorld;
+      } else {
+        if (Math.hypot(ptWorld.x - dimensionStartWorld.x, ptWorld.y - dimensionStartWorld.y) >= 0.15) {
+          pushHistorySnapshot();
+          if (!Array.isArray(project.dimensions)) project.dimensions = [];
+          const newDim = {
+            id: `dim-${Date.now()}`,
+            x1: dimensionStartWorld.x,
+            y1: dimensionStartWorld.y,
+            x2: ptWorld.x,
+            y2: ptWorld.y,
+            offset: 0.25
+          };
+          project.dimensions.push(newDim);
+          selectedItem = { kind: 'dimension', id: newDim.id };
+          dimensionStartWorld = null;
+          setTool('select');
+          onSelectionChange(selectedItem);
+          notifyStateChange();
+          onProjectMutate('Cota adicionada à planta');
+        }
+      }
+      render();
+      return;
+    }
+
+    // 3d. Inserir Escada com Tipos de Escada (Item 19)
+    if (activeTool === 'stair') {
+      pushHistorySnapshot();
+      if (!Array.isArray(project.stairs)) project.stairs = [];
+      const newStair = {
+        id: `stair-${Date.now()}`,
+        stairType: 'reta', // 'reta' | 'em_l' | 'em_u' | 'caracol'
+        label: 'Escada Acesso',
+        x: snap(world.x - 0.6, 0.1),
+        y: snap(world.y - 1.4, 0.1),
+        w: 1.20,
+        h: 2.80,
+        steps: 15
+      };
+      project.stairs.push(newStair);
+      selectedItem = { kind: 'stair', id: newStair.id };
+      setTool('select');
+      onSelectionChange(selectedItem);
+      notifyStateChange();
+      onProjectMutate('Escada adicionada à planta (edite o tipo no painel direito)');
+      render();
+      return;
+    }
+
+    // 4. Traçar Eletroduto ou Eletrocalha (Item 18)
+    if (activeTool === 'conduit' || activeTool === 'eletrocalha') {
       const hitPt = findPointAtScreen(sx, sy);
       if (hitPt) {
         if (!conduitStartPointId) {
           conduitStartPointId = hitPt.id;
         } else if (conduitStartPointId !== hitPt.id) {
           pushHistorySnapshot();
+          const isTray = activeTool === 'eletrocalha';
           project.conduits.push({
             id: `cd-${Date.now()}`,
             fromId: conduitStartPointId,
             toId: hitPt.id,
-            mounting: 'laje',
-            diameterMm: 20
+            mounting: isTray ? 'eletrocalha' : 'laje',
+            diameterMm: isTray ? 100 : 20,
+            tray: isTray
           });
           conduitStartPointId = null;
-          onProjectMutate('Eletroduto lançado entre os pontos');
+          onProjectMutate(isTray ? 'Eletrocalha lançada entre os pontos' : 'Eletroduto lançado entre os pontos');
         }
         render();
       }
       return;
     }
 
-    // 5. Lançar Ponto Elétrico
-    if (['qdc', 'light', 'switch', 'tug_baixa', 'tug_media', 'tue_alta'].includes(activeTool)) {
+    // 5. Lançar Ponto Elétrico / Telecom / CFTV / Quadro / Padrão
+    if (POINT_TOOLS.includes(activeTool)) {
       placeNewPointAt(world.x, world.y, activeTool);
       return;
     }
@@ -914,6 +1066,44 @@ window.CAD2D = (function () {
       return;
     }
 
+    // 7b. Texto / Observação na Planta
+    const hitTxt = findTextAtScreen(sx, sy);
+    if (hitTxt) {
+      pendingDragSnapshot = captureStateSnapshot();
+      selectedItem = { kind: 'text', id: hitTxt.id };
+      isDragging = true;
+      dragType = 'text';
+      dragInitialPos = { x: hitTxt.x, y: hitTxt.y };
+      onSelectionChange(selectedItem);
+      notifyStateChange();
+      render();
+      return;
+    }
+
+    // 7c. Cota Manual
+    const hitDim = findDimensionAtScreen(sx, sy);
+    if (hitDim) {
+      selectedItem = { kind: 'dimension', id: hitDim.id };
+      onSelectionChange(selectedItem);
+      notifyStateChange();
+      render();
+      return;
+    }
+
+    // 7d. Escada
+    const hitStair = findStairAtWorld(world.x, world.y);
+    if (hitStair) {
+      pendingDragSnapshot = captureStateSnapshot();
+      selectedItem = { kind: 'stair', id: hitStair.id };
+      isDragging = true;
+      dragType = 'stair';
+      dragInitialPos = { x: hitStair.x, y: hitStair.y };
+      onSelectionChange(selectedItem);
+      notifyStateChange();
+      render();
+      return;
+    }
+
     // 8. Porta, Janela ou Vão Livre
     const hitOp = findOpeningAtScreen(sx, sy);
     if (hitOp) {
@@ -927,7 +1117,7 @@ window.CAD2D = (function () {
       return;
     }
 
-    // 9. Eletroduto
+    // 9. Eletroduto / Eletrocalha
     const hitConduit = findConduitAtScreen(sx, sy);
     if (hitConduit) {
       selectedItem = { kind: 'conduit', id: hitConduit.id };
@@ -1059,6 +1249,20 @@ window.CAD2D = (function () {
       offsetX = dragInitialPos.x + (sx - dragStartScreen.x);
       offsetY = dragInitialPos.y + (sy - dragStartScreen.y);
       render();
+    } else if (dragType === 'text' && selectedItem && selectedItem.kind === 'text') {
+      const tx = (project.texts || []).find(t => t.id === selectedItem.id);
+      if (tx) {
+        tx.x = snap(dragInitialPos.x + (world.x - dragStartWorld.x), 0.1);
+        tx.y = snap(dragInitialPos.y + (world.y - dragStartWorld.y), 0.1);
+        render();
+      }
+    } else if (dragType === 'stair' && selectedItem && selectedItem.kind === 'stair') {
+      const st = (project.stairs || []).find(s => s.id === selectedItem.id);
+      if (st) {
+        st.x = snap(dragInitialPos.x + (world.x - dragStartWorld.x), 0.1);
+        st.y = snap(dragInitialPos.y + (world.y - dragStartWorld.y), 0.1);
+        render();
+      }
     } else if (dragType === 'opening' && selectedItem && selectedItem.kind === 'opening') {
       // Arrastar Porta, Janela ou Vão ao longo da parede ou para qualquer outra parede!
       const op = (project.openings || []).find(o => o.id === selectedItem.id);
@@ -1073,7 +1277,6 @@ window.CAD2D = (function () {
         }
       }
     } else if (dragType === 'resize_opening' && selectedItem && selectedItem.kind === 'opening') {
-      // Redimensionar largura da Porta, Janela ou Vão pelas alças das extremidades
       const op = (project.openings || []).find(o => o.id === selectedItem.id);
       const room = op ? project.rooms.find(r => r.id === op.roomId) : null;
       if (op && room) {
@@ -1094,7 +1297,7 @@ window.CAD2D = (function () {
         const hostRoom = findRoomAtWorld(nx, ny);
         if (hostRoom) {
           pt.roomId = hostRoom.id;
-          if (pt.category !== 'light') {
+          if (pt.category !== 'light' && pt.category !== 'sensor' && pt.category !== 'jbox' && pt.category !== 'riser') {
             const margin = 0.14;
             if (Math.abs(nx - hostRoom.x) < 0.35) nx = +(hostRoom.x + margin).toFixed(2);
             else if (Math.abs(nx - (hostRoom.x + hostRoom.w)) < 0.35) nx = +(hostRoom.x + hostRoom.w - margin).toFixed(2);
@@ -1201,7 +1404,6 @@ window.CAD2D = (function () {
         h: newRoomPreview.h
       };
       project.rooms.push(newRoom);
-      // Cria porta e janela padrão no novo ambiente
       if (!Array.isArray(project.openings)) project.openings = [];
       project.openings.push({
         id: `op-d-${newRoom.id}`,
@@ -1235,7 +1437,7 @@ window.CAD2D = (function () {
       onSelectionChange(selectedItem);
       notifyStateChange();
       onProjectMutate(`Ambiente "${newRoom.name}" criado com porta, janela e pontos NBR 5410!`);
-    } else if (['point', 'room', 'resize_room', 'opening', 'resize_opening'].includes(dragType)) {
+    } else if (['point', 'room', 'resize_room', 'opening', 'resize_opening', 'text', 'stair'].includes(dragType)) {
       const afterSnap = captureStateSnapshot();
       if (pendingDragSnapshot && afterSnap !== pendingDragSnapshot) {
         undoStack.push(pendingDragSnapshot);
@@ -1282,14 +1484,19 @@ window.CAD2D = (function () {
     };
     project.points.push(lightPt);
 
+    // Posiciona interruptor evitando portas e vãos livres (Item 1)
+    const swPos = window.NBR5410.findSwitchPositionNearRoomDoor
+      ? window.NBR5410.findSwitchPositionNearRoomDoor(room, project, 0.14)
+      : { x: +(room.x + 0.35).toFixed(2), y: +(room.y + room.h - 0.14).toFixed(2) };
+
     const swPt = {
       id: `pt-s-${stamp}`,
       category: 'switch',
       subtype: 'int_simples',
       label: `Int. ${room.name}`,
       command: cmd,
-      x: +(room.x + 0.35).toFixed(2),
-      y: +(room.y + room.h - 0.14).toFixed(2),
+      x: swPos.x,
+      y: swPos.y,
       z: 1.2,
       powerVA: 0,
       circuitId: lightCircuit,
@@ -1314,19 +1521,14 @@ window.CAD2D = (function () {
       diameterMm: 20
     });
 
-    const margin = 0.14;
-    const walls = [
-      (t) => ({ x: +(room.x + room.w * t).toFixed(2), y: +(room.y + margin).toFixed(2) }),
-      (t) => ({ x: +(room.x + room.w - margin).toFixed(2), y: +(room.y + room.h * t).toFixed(2) }),
-      (t) => ({ x: +(room.x + margin).toFixed(2), y: +(room.y + room.h * t).toFixed(2) }),
-      (t) => ({ x: +(room.x + room.w * t).toFixed(2), y: +(room.y + room.h - margin).toFixed(2) })
-    ];
-
+    const wallCodes = ['n', 'e', 'w', 's'];
     for (let i = 0; i < norms.minTugCount; i++) {
-      const wallFn = walls[i % walls.length];
-      const slot = Math.floor(i / walls.length);
+      const wallCode = wallCodes[i % wallCodes.length];
+      const slot = Math.floor(i / wallCodes.length);
       const t = slot === 0 ? 0.5 : slot % 2 === 1 ? 0.28 : 0.72;
-      const pos = wallFn(t);
+      const pos = window.NBR5410.findSafeWallPoint
+        ? window.NBR5410.findSafeWallPoint(room, wallCode, t, project, 0.14)
+        : { x: +(room.x + room.w * t).toFixed(2), y: +(room.y + 0.14).toFixed(2) };
       const isHigh = i < norms.highCount;
       const tugPt = {
         id: `pt-t-${stamp}-${i}`,
@@ -1354,18 +1556,35 @@ window.CAD2D = (function () {
   function placeNewPointAt(wx, wy, tool) {
     pushHistorySnapshot();
     const hostRoom = findRoomAtWorld(wx, wy);
-    const defaultCircuit =
-      tool === 'light' || tool === 'switch'
-        ? (project.circuits.find(c => c.type === 'iluminacao')?.id || project.circuits[0]?.id || 'C1')
-        : (project.circuits.find(c => c.type !== 'iluminacao')?.id || project.circuits[0]?.id || 'C2');
+    const isLightOrSw = ['light', 'sensor_presenca', 'switch', 'int_duplo', 'int_triplo', 'int_3way', 'int_4way', 'int_campainha', 'campainha'].includes(tool);
+    const defaultCircuit = isLightOrSw
+      ? (project.circuits.find(c => c.type === 'iluminacao')?.id || project.circuits[0]?.id || 'C1')
+      : (project.circuits.find(c => c.type !== 'iluminacao')?.id || project.circuits[0]?.id || 'C2');
 
     const mapConfig = {
-      qdc: { category: 'qdc', subtype: 'qdc_embutir', label: 'QDC', z: 1.5, powerVA: 0, circuitId: null },
+      qdc: { category: 'qdc', subtype: 'qdc_embutir', label: 'QDC-01', z: 1.5, powerVA: 0, circuitId: null },
+      quadro_parcial: { category: 'qdc', subtype: 'quadro_parcial', label: `QD-0${project.points.filter(p => p.category === 'qdc').length + 1}`, z: 1.5, powerVA: 0, circuitId: null },
+      padrao_entrada: { category: 'padrao', subtype: 'padrao_concessionaria', label: 'QM Padrão Entrada', z: 1.6, powerVA: 0, circuitId: null },
       light: { category: 'light', subtype: 'luz_teto', label: 'Ponto de Luz', z: 2.8, powerVA: 100, command: 'a1', circuitId: defaultCircuit },
-      switch: { category: 'switch', subtype: 'int_simples', label: 'Interruptor 1S', z: 1.2, powerVA: 0, command: 'a1', circuitId: defaultCircuit },
-      tug_baixa: { category: 'tug', subtype: 'tug_baixa', label: 'TUG Baixa 100VA', z: 0.3, powerVA: 100, circuitId: defaultCircuit },
+      sensor_presenca: { category: 'sensor', subtype: 'sensor_presenca', label: 'Sensor Presença', z: 2.8, powerVA: 0, command: 'a1', circuitId: defaultCircuit },
+      switch: { category: 'switch', subtype: 'int_simples', label: 'Int. Simples (1S)', z: 1.2, powerVA: 0, command: 'a1', circuitId: defaultCircuit },
+      int_duplo: { category: 'switch', subtype: 'int_duplo', label: 'Int. Duplo (2S)', z: 1.2, powerVA: 0, command: 'a1,b1', circuitId: defaultCircuit },
+      int_triplo: { category: 'switch', subtype: 'int_triplo', label: 'Int. Triplo (3S)', z: 1.2, powerVA: 0, command: 'a1,b1,c1', circuitId: defaultCircuit },
+      int_3way: { category: 'switch', subtype: 'int_3way', label: 'Int. Three-Way (S3w)', z: 1.2, powerVA: 0, command: 'a1', circuitId: defaultCircuit },
+      int_4way: { category: 'switch', subtype: 'int_4way', label: 'Int. Four-Way (S4w)', z: 1.2, powerVA: 0, command: 'a1', circuitId: defaultCircuit },
+      int_campainha: { category: 'switch', subtype: 'int_campainha', label: 'Pulsador Campainha', z: 1.2, powerVA: 0, command: 'camp', circuitId: defaultCircuit },
+      tug_baixa: { category: 'tug', subtype: 'tug_baixa', label: 'TUG Simples 100VA', z: 0.3, powerVA: 100, circuitId: defaultCircuit },
+      tug_dupla: { category: 'tug', subtype: 'tug_dupla', label: 'Tomada Dupla (2x)', z: 0.3, powerVA: 200, circuitId: defaultCircuit },
+      tug_tripla: { category: 'tug', subtype: 'tug_tripla', label: 'Tomada Tripla (3x)', z: 0.3, powerVA: 300, circuitId: defaultCircuit },
       tug_media: { category: 'tug', subtype: 'tug_media', label: 'TUG Média 600VA', z: 1.3, powerVA: 600, circuitId: defaultCircuit },
-      tue_alta: { category: 'tue', subtype: 'tue_alta', label: 'TUE Específica', z: 2.2, powerVA: 5500, circuitId: defaultCircuit }
+      tue_alta: { category: 'tue', subtype: 'tue_alta', label: 'TUE Específica', z: 2.2, powerVA: 5500, circuitId: defaultCircuit },
+      tomada_rede: { category: 'telecom', subtype: 'tomada_rede', label: 'Dados RJ45 Cat6', z: 0.3, powerVA: 0, circuitId: null },
+      tomada_telefone: { category: 'telecom', subtype: 'tomada_telefone', label: 'Telefone RJ11', z: 0.3, powerVA: 0, circuitId: null },
+      campainha: { category: 'bell', subtype: 'campainha', label: 'Campainha / Cigarra', z: 2.2, powerVA: 15, command: 'camp', circuitId: defaultCircuit },
+      camera_cftv: { category: 'camera', subtype: 'camera_cftv', label: 'Câmera CFTV IP', z: 2.5, powerVA: 15, circuitId: null },
+      caixa_passagem: { category: 'jbox', subtype: 'caixa_passagem', label: 'Caixa Passagem 4x4"', z: 0.3, powerVA: 0, circuitId: null },
+      conduit_sobe: { category: 'riser', subtype: 'conduit_sobe', label: 'Eletroduto Sobe ↗', z: 1.5, powerVA: 0, circuitId: null },
+      conduit_desce: { category: 'riser', subtype: 'conduit_desce', label: 'Eletroduto Desce ↘', z: 0.5, powerVA: 0, circuitId: null }
     };
 
     const cfg = mapConfig[tool];
@@ -1399,6 +1618,12 @@ window.CAD2D = (function () {
       project.conduits = project.conduits.filter(c => c.id !== selectedItem.id);
     } else if (selectedItem.kind === 'opening') {
       project.openings = (project.openings || []).filter(o => o.id !== selectedItem.id);
+    } else if (selectedItem.kind === 'text') {
+      project.texts = (project.texts || []).filter(t => t.id !== selectedItem.id);
+    } else if (selectedItem.kind === 'dimension') {
+      project.dimensions = (project.dimensions || []).filter(d => d.id !== selectedItem.id);
+    } else if (selectedItem.kind === 'stair') {
+      project.stairs = (project.stairs || []).filter(s => s.id !== selectedItem.id);
     } else if (selectedItem.kind === 'room') {
       const rmId = selectedItem.id;
       const roomPtIds = new Set(project.points.filter(p => p.roomId === rmId && p.category !== 'qdc').map(p => p.id));
@@ -1412,6 +1637,44 @@ window.CAD2D = (function () {
     notifyStateChange();
     onProjectMutate('Item removido da planta (Delete)');
     render();
+  }
+
+  function findTextAtScreen(sx, sy) {
+    if (!project || !Array.isArray(project.texts)) return null;
+    for (let i = project.texts.length - 1; i >= 0; i--) {
+      const tx = project.texts[i];
+      const sp = worldToScreen(tx.x, tx.y);
+      if (Math.abs(sx - sp.x) <= 75 && Math.abs(sy - sp.y) <= 18) {
+        return tx;
+      }
+    }
+    return null;
+  }
+
+  function findDimensionAtScreen(sx, sy) {
+    if (!project || !Array.isArray(project.dimensions)) return null;
+    for (let i = project.dimensions.length - 1; i >= 0; i--) {
+      const dm = project.dimensions[i];
+      const s1 = worldToScreen(dm.x1, dm.y1);
+      const s2 = worldToScreen(dm.x2, dm.y2);
+      if (distToSegment({ x: sx, y: sy }, s1, s2) <= 14) {
+        return dm;
+      }
+    }
+    return null;
+  }
+
+  function findStairAtWorld(wx, wy) {
+    if (!project || !Array.isArray(project.stairs)) return null;
+    for (let i = project.stairs.length - 1; i >= 0; i--) {
+      const st = project.stairs[i];
+      const w = Number(st.w || 1.2);
+      const h = Number(st.h || 2.8);
+      if (wx >= st.x && wx <= st.x + w && wy >= st.y && wy <= st.y + h) {
+        return st;
+      }
+    }
+    return null;
   }
 
   function findPointAtScreen(sx, sy) {
@@ -1468,22 +1731,29 @@ window.CAD2D = (function () {
     if (!ctx || !canvas) return;
     const w = canvas.width;
     const h = canvas.height;
+    const isLight = document.body.classList.contains('light-theme');
 
     ctx.clearRect(0, 0, w, h);
+    if (isLight) {
+      ctx.fillStyle = '#f8fafc';
+      ctx.fillRect(0, 0, w, h);
+    }
 
-    drawGrid(w, h);
+    if (layers.grid !== false) {
+      drawGrid(w, h, isLight);
+    }
 
     if (!project) return;
 
     if (backgroundOverlayImg) {
       const topLeft = worldToScreen(0, 0);
       ctx.save();
-      ctx.globalAlpha = 0.32;
+      ctx.globalAlpha = 0.36;
       ctx.drawImage(backgroundOverlayImg, topLeft.x, topLeft.y, 12 * scale, 9 * scale);
       ctx.restore();
     }
 
-    // 1. Cômodos e Paredes
+    // 1. Cômodos, Paredes e Escadas
     if (layers.architecture) {
       project.rooms.forEach(room => drawRoom(room));
       if (newRoomPreview) {
@@ -1494,6 +1764,9 @@ window.CAD2D = (function () {
           isPreview: true
         });
       }
+
+      // Escadas (Item 19)
+      (project.stairs || []).forEach(st => drawStair2D(st));
 
       // 2. Portas, Janelas e Vãos Livres (NBR 6492)
       (project.openings || []).forEach(op => drawArchitecturalOpening2D(op, false));
@@ -1518,18 +1791,18 @@ window.CAD2D = (function () {
       }
     }
 
-    // 3. Eletrodutos e Condutores
+    // 3. Eletrodutos, Eletrocalhas e Condutores
     if (layers.conduits) {
       project.conduits.forEach(cd => drawConduitNBR(cd));
-      if (activeTool === 'conduit' && conduitStartPointId) {
+      if ((activeTool === 'conduit' || activeTool === 'eletrocalha') && conduitStartPointId) {
         const startPt = project.points.find(p => p.id === conduitStartPointId);
         if (startPt) {
           const s1 = worldToScreen(startPt.x, startPt.y);
           const s2 = worldToScreen(mouseWorldPos.x, mouseWorldPos.y);
           ctx.save();
           ctx.setLineDash([5, 4]);
-          ctx.strokeStyle = '#fbbf24';
-          ctx.lineWidth = 2;
+          ctx.strokeStyle = activeTool === 'eletrocalha' ? '#10b981' : '#fbbf24';
+          ctx.lineWidth = activeTool === 'eletrocalha' ? 4 : 2;
           ctx.beginPath();
           ctx.moveTo(s1.x, s1.y);
           ctx.lineTo(s2.x, s2.y);
@@ -1539,16 +1812,37 @@ window.CAD2D = (function () {
       }
     }
 
-    // 4. Pontos Elétricos (NBR 5410 / 5444)
+    // 4. Pontos Elétricos, Telecom, CFTV, Sensores e Quadros (NBR 5410 / 5444)
     project.points.forEach(pt => {
-      if (pt.category === 'light' || pt.category === 'switch') {
+      if (pt.category === 'light' || pt.category === 'switch' || pt.category === 'sensor') {
         if (!layers.lighting) return;
       }
       if (pt.category === 'tug' || pt.category === 'tue') {
         if (!layers.outlets) return;
       }
+      if (['telecom', 'bell', 'camera'].includes(pt.category)) {
+        if (layers.telecom === false) return;
+      }
       drawNBR5410Symbol(pt);
     });
+
+    // 4b. Cotas Manuais e Textos/Observações (Items 15 e 16)
+    if (layers.dimensions) {
+      (project.dimensions || []).forEach(dm => drawManualDimension2D(dm));
+      if (activeTool === 'dimension' && dimensionStartWorld) {
+        drawManualDimension2D({
+          id: 'preview-dim',
+          x1: dimensionStartWorld.x,
+          y1: dimensionStartWorld.y,
+          x2: mouseWorldPos.x,
+          y2: mouseWorldPos.y,
+          isPreview: true
+        });
+      }
+    }
+    if (layers.labels) {
+      (project.texts || []).forEach(tx => drawCustomText2D(tx));
+    }
 
     // 5. Alças de Redimensionamento do Cômodo ou Abertura Selecionada
     if (selectedItem && selectedItem.kind === 'room') {
@@ -1564,13 +1858,13 @@ window.CAD2D = (function () {
     }
   }
 
-  function drawGrid(w, h) {
+  function drawGrid(w, h, isLight = false) {
     ctx.save();
     const stepMinor = scale * 0.5;
     const stepMajor = scale * 1.0;
 
     if (stepMinor >= 14) {
-      ctx.strokeStyle = 'rgba(51, 65, 85, 0.20)';
+      ctx.strokeStyle = isLight ? 'rgba(148, 163, 184, 0.25)' : 'rgba(51, 65, 85, 0.20)';
       ctx.lineWidth = 1;
       ctx.beginPath();
       for (let x = offsetX % stepMinor; x < w; x += stepMinor) {
@@ -1584,7 +1878,7 @@ window.CAD2D = (function () {
       ctx.stroke();
     }
 
-    ctx.strokeStyle = 'rgba(71, 85, 105, 0.36)';
+    ctx.strokeStyle = isLight ? 'rgba(100, 116, 139, 0.38)' : 'rgba(71, 85, 105, 0.36)';
     ctx.lineWidth = 1;
     ctx.beginPath();
     for (let x = offsetX % stepMajor; x < w; x += stepMajor) {
@@ -1596,6 +1890,154 @@ window.CAD2D = (function () {
       ctx.lineTo(w, y);
     }
     ctx.stroke();
+    ctx.restore();
+  }
+
+  // Desenho de Escadas em 2D (Reta, em L, em U, Caracol) (Item 19)
+  function drawStair2D(st) {
+    const pos = worldToScreen(st.x, st.y);
+    const sw = Number(st.w || 1.2) * scale;
+    const sh = Number(st.h || 2.8) * scale;
+    const isSel = selectedItem && selectedItem.kind === 'stair' && selectedItem.id === st.id;
+    const steps = Math.max(6, Number(st.steps || 14));
+    const type = st.stairType || 'reta';
+
+    ctx.save();
+    ctx.fillStyle = isSel ? 'rgba(245, 158, 11, 0.22)' : 'rgba(148, 163, 184, 0.16)';
+    ctx.strokeStyle = isSel ? '#f59e0b' : '#94a3b8';
+    ctx.lineWidth = isSel ? 2.2 : 1.5;
+
+    if (type === 'caracol') {
+      const cx = pos.x + sw / 2;
+      const cy = pos.y + sh / 2;
+      const r = Math.min(sw, sh) / 2;
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      for (let i = 0; i < 12; i++) {
+        const ang = (i / 12) * Math.PI * 2;
+        ctx.beginPath();
+        ctx.moveTo(cx, cy);
+        ctx.lineTo(cx + Math.cos(ang) * r, cy + Math.sin(ang) * r);
+        ctx.stroke();
+      }
+      ctx.beginPath();
+      ctx.arc(cx, cy, r * 0.2, 0, Math.PI * 2);
+      ctx.fillStyle = '#0f172a';
+      ctx.fill();
+      ctx.stroke();
+    } else {
+      ctx.fillRect(pos.x, pos.y, sw, sh);
+      ctx.strokeRect(pos.x, pos.y, sw, sh);
+      const stepH = sh / steps;
+      ctx.beginPath();
+      for (let i = 1; i < steps; i++) {
+        const y = pos.y + i * stepH;
+        if (type === 'em_u' && i > steps * 0.4 && i < steps * 0.6) continue;
+        ctx.moveTo(pos.x, y);
+        ctx.lineTo(pos.x + sw, y);
+      }
+      if (type === 'em_u') {
+        ctx.moveTo(pos.x + sw / 2, pos.y + sh * 0.2);
+        ctx.lineTo(pos.x + sw / 2, pos.y + sh);
+      } else if (type === 'em_l') {
+        ctx.fillRect(pos.x, pos.y, sw, sh * 0.32);
+      }
+      ctx.stroke();
+
+      // Seta indicativa de subida (SOBE)
+      ctx.strokeStyle = '#fbbf24';
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.moveTo(pos.x + sw / 2, pos.y + sh - 10);
+      ctx.lineTo(pos.x + sw / 2, pos.y + 12);
+      ctx.lineTo(pos.x + sw / 2 - 5, pos.y + 19);
+      ctx.moveTo(pos.x + sw / 2, pos.y + 12);
+      ctx.lineTo(pos.x + sw / 2 + 5, pos.y + 19);
+      ctx.stroke();
+    }
+
+    if (layers.labels) {
+      ctx.fillStyle = '#fde68a';
+      ctx.font = '700 9.5px JetBrains Mono, monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(`${st.label || 'ESCADA'} (${type.toUpperCase()})`, pos.x + sw / 2, pos.y - 6);
+    }
+    ctx.restore();
+  }
+
+  // Desenho de Cota Manual (Item 16)
+  function drawManualDimension2D(dm) {
+    const s1 = worldToScreen(dm.x1, dm.y1);
+    const s2 = worldToScreen(dm.x2, dm.y2);
+    const isSel = selectedItem && selectedItem.kind === 'dimension' && selectedItem.id === dm.id;
+    const distMeters = Math.hypot(dm.x2 - dm.x1, dm.y2 - dm.y1);
+    const angle = Math.atan2(s2.y - s1.y, s2.x - s1.x);
+
+    ctx.save();
+    ctx.strokeStyle = isSel ? '#fde047' : dm.isPreview ? '#38bdf8' : '#a855f7';
+    ctx.lineWidth = isSel ? 2.2 : 1.5;
+
+    ctx.beginPath();
+    ctx.moveTo(s1.x, s1.y);
+    ctx.lineTo(s2.x, s2.y);
+    ctx.stroke();
+
+    // Ticks de extremidade a 45° (padrão ABNT NBR 6492)
+    [s1, s2].forEach(pt => {
+      ctx.save();
+      ctx.translate(pt.x, pt.y);
+      ctx.rotate(angle);
+      ctx.beginPath();
+      ctx.moveTo(0, -6);
+      ctx.lineTo(0, 6);
+      ctx.moveTo(-4, 4);
+      ctx.lineTo(4, -4);
+      ctx.stroke();
+      ctx.restore();
+    });
+
+    const mx = (s1.x + s2.x) / 2;
+    const my = (s1.y + s2.y) / 2;
+    ctx.translate(mx, my);
+    let txtAngle = angle;
+    if (txtAngle > Math.PI / 2 || txtAngle < -Math.PI / 2) txtAngle += Math.PI;
+    ctx.rotate(txtAngle);
+
+    const lbl = `${distMeters.toFixed(2)} m`;
+    ctx.fillStyle = '#0f172a';
+    ctx.fillRect(-26, -16, 52, 14);
+    ctx.fillStyle = isSel ? '#fde047' : '#e9d5ff';
+    ctx.font = '700 10px JetBrains Mono, monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(lbl, 0, -5);
+    ctx.restore();
+  }
+
+  // Desenho de Texto / Observação na Planta (Item 15)
+  function drawCustomText2D(tx) {
+    const s = worldToScreen(tx.x, tx.y);
+    const isSel = selectedItem && selectedItem.kind === 'text' && selectedItem.id === tx.id;
+    const fSize = Number(tx.fontSize || 12);
+
+    ctx.save();
+    ctx.font = `700 ${fSize}px Inter, sans-serif`;
+    const str = tx.text || 'Nota';
+    const tw = ctx.measureText(str).width + 14;
+
+    ctx.fillStyle = isSel ? 'rgba(245, 158, 11, 0.25)' : 'rgba(15, 23, 42, 0.84)';
+    ctx.strokeStyle = isSel ? '#f59e0b' : '#475569';
+    ctx.lineWidth = isSel ? 1.8 : 1.1;
+    ctx.beginPath();
+    ctx.roundRect(s.x - tw / 2, s.y - fSize, tw, fSize + 10, 4);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = tx.color || '#fde047';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(str, s.x, s.y - fSize / 2 + 5);
     ctx.restore();
   }
 
@@ -1867,24 +2309,44 @@ window.CAD2D = (function () {
 
     const cx = (s1.x + s2.x) / 2 - dy * 0.13;
     const cy = (s1.y + s2.y) / 2 + dx * 0.13;
+    const isTray = cd.mounting === 'eletrocalha' || cd.tray;
 
     ctx.save();
-    ctx.beginPath();
-    if (cd.mounting === 'parede') {
-      ctx.setLineDash([7, 4]);
-      ctx.strokeStyle = isSelected ? '#fde047' : '#38bdf8';
-    } else if (cd.mounting === 'piso') {
-      ctx.setLineDash([9, 3, 2, 3]);
-      ctx.strokeStyle = isSelected ? '#fde047' : '#a855f7';
-    } else {
+    if (isTray) {
+      // Símbolo de Eletrocalha / Perfilado Metálico (trilho duplo hachurado) (Item 18)
+      ctx.strokeStyle = isSelected ? '#fde047' : '#10b981';
+      ctx.lineWidth = isSelected ? 6.5 : 5.0;
+      ctx.beginPath();
+      ctx.moveTo(s1.x, s1.y);
+      ctx.quadraticCurveTo(cx, cy, s2.x, s2.y);
+      ctx.stroke();
+
+      ctx.strokeStyle = '#0f172a';
+      ctx.lineWidth = 2.4;
+      ctx.setLineDash([6, 4]);
+      ctx.beginPath();
+      ctx.moveTo(s1.x, s1.y);
+      ctx.quadraticCurveTo(cx, cy, s2.x, s2.y);
+      ctx.stroke();
       ctx.setLineDash([]);
-      ctx.strokeStyle = isSelected ? '#fde047' : '#f59e0b';
+    } else {
+      ctx.beginPath();
+      if (cd.mounting === 'parede') {
+        ctx.setLineDash([7, 4]);
+        ctx.strokeStyle = isSelected ? '#fde047' : '#38bdf8';
+      } else if (cd.mounting === 'piso') {
+        ctx.setLineDash([9, 3, 2, 3]);
+        ctx.strokeStyle = isSelected ? '#fde047' : '#a855f7';
+      } else {
+        ctx.setLineDash([]);
+        ctx.strokeStyle = isSelected ? '#fde047' : '#f59e0b';
+      }
+      ctx.lineWidth = isSelected ? 2.8 : 1.7;
+      ctx.moveTo(s1.x, s1.y);
+      ctx.quadraticCurveTo(cx, cy, s2.x, s2.y);
+      ctx.stroke();
+      ctx.setLineDash([]);
     }
-    ctx.lineWidth = isSelected ? 2.8 : 1.7;
-    ctx.moveTo(s1.x, s1.y);
-    ctx.quadraticCurveTo(cx, cy, s2.x, s2.y);
-    ctx.stroke();
-    ctx.setLineDash([]);
 
     if (layers.labels && dist > 44) {
       const mx = 0.25 * s1.x + 0.5 * cx + 0.25 * s2.x;
@@ -1898,6 +2360,8 @@ window.CAD2D = (function () {
       const isSwitchBranch = p1.category === 'switch' || p2.category === 'switch';
       const circuitObj = project.circuits.find(c => c.id === targetPt.circuitId);
       const isBiphasic = circuitObj && circuitObj.phase && circuitObj.phase.includes('+');
+      const secMm2 = circuitObj ? (circuitObj.type === 'iluminacao' ? 1.5 : (targetPt.category === 'tue' && Number(targetPt.powerVA) > 4500 ? 4.0 : 2.5)) : 2.5;
+      const diam = cd.diameterMm || (secMm2 >= 4 ? 25 : 20);
 
       ctx.save();
       ctx.translate(mx, my);
@@ -1919,12 +2383,13 @@ window.CAD2D = (function () {
         drawConductorTick(ctx, 5, 'terra');
       }
 
-      if (targetPt.circuitId) {
-        ctx.fillStyle = '#cbd5e1';
-        ctx.font = '600 8.5px JetBrains Mono, monospace';
-        ctx.textAlign = 'center';
-        ctx.fillText(targetPt.circuitId, 0, 14);
-      }
+      const tagTxt = isTray
+        ? `${targetPt.circuitId || ''} Calha 100x50`.trim()
+        : `${targetPt.circuitId || ''} #${secMm2}mm² Ø${diam}mm`.trim();
+      ctx.fillStyle = isTray ? '#6ee7b7' : '#cbd5e1';
+      ctx.font = '600 8px JetBrains Mono, monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(tagTxt, 0, 14);
 
       ctx.restore();
     }
@@ -1974,13 +2439,15 @@ window.CAD2D = (function () {
     }
 
     if (pt.category === 'qdc') {
+      const isPartial = pt.subtype === 'quadro_parcial';
+      const qColor = isPartial ? '#a855f7' : '#f59e0b';
       const angle = getWallNormalAngle(pt);
       ctx.save();
       ctx.rotate(angle - Math.PI / 2);
       const qw = 28;
       const qh = 16;
       ctx.fillStyle = '#0b1120';
-      ctx.strokeStyle = '#f59e0b';
+      ctx.strokeStyle = qColor;
       ctx.lineWidth = 2;
       ctx.fillRect(-qw / 2, -qh / 2, qw, qh);
       ctx.strokeRect(-qw / 2, -qh / 2, qw, qh);
@@ -1990,15 +2457,33 @@ window.CAD2D = (function () {
       ctx.lineTo(qw / 2, -qh / 2);
       ctx.lineTo(qw / 2, qh / 2);
       ctx.closePath();
-      ctx.fillStyle = '#f59e0b';
+      ctx.fillStyle = qColor;
       ctx.fill();
       ctx.restore();
 
       if (layers.labels) {
-        ctx.fillStyle = '#fde68a';
-        ctx.font = '700 10.5px JetBrains Mono, monospace';
+        ctx.fillStyle = isPartial ? '#e9d5ff' : '#fde68a';
+        ctx.font = '700 10px JetBrains Mono, monospace';
         ctx.textAlign = 'center';
-        ctx.fillText(pt.label || 'QDC', 0, -15);
+        ctx.fillText(pt.label || (isPartial ? 'QD-Parcial' : 'QDC'), 0, -15);
+      }
+    } else if (pt.category === 'padrao') {
+      // Símbolo Padrão de Entrada da Concessionária (Caixa Medidor kWh + Poste) (Item 6)
+      ctx.fillStyle = '#0b1120';
+      ctx.strokeStyle = '#f59e0b';
+      ctx.lineWidth = 2.2;
+      ctx.fillRect(-14, -14, 28, 28);
+      ctx.strokeRect(-14, -14, 28, 28);
+      ctx.beginPath();
+      ctx.arc(0, 0, 9, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillStyle = '#fde68a';
+      ctx.font = '800 7.5px JetBrains Mono, monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('kWh', 0, 0.5);
+      if (layers.labels) {
+        ctx.fillText(pt.label || 'Padrão Entrada', 0, -20);
       }
     } else if (pt.category === 'light') {
       const r = 16;
@@ -2031,14 +2516,38 @@ window.CAD2D = (function () {
 
       ctx.fillStyle = '#34d399';
       ctx.fillText(pt.command || 'a', r * 0.42, r * 0.44);
+    } else if (pt.category === 'sensor') {
+      // Símbolo Sensor de Presença (Item 22)
+      const r = 11;
+      ctx.beginPath();
+      ctx.arc(0, 0, r, 0, Math.PI * 2);
+      ctx.fillStyle = '#0b1120';
+      ctx.fill();
+      ctx.strokeStyle = '#10b981';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      // Ondas de detecção PIR
+      ctx.beginPath();
+      ctx.arc(0, 0, r + 4, -Math.PI * 0.35, Math.PI * 0.35);
+      ctx.stroke();
+      ctx.fillStyle = '#6ee7b7';
+      ctx.font = '700 8px JetBrains Mono, monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('SP', 0, 0.5);
+      if (layers.labels) {
+        ctx.fillText(pt.command || 'a1', 0, r + 10);
+      }
     } else if (pt.category === 'switch') {
+      // Símbolos NBR 5444 de Interruptores: Simples (1S), Duplo (2S), Triplo (3S), Three-Way (S3w), Four-Way (S4w), Pulsador Campainha (Items 21 e 24)
       const angle = getWallNormalAngle(pt);
-      const r = 7.5;
+      const r = 8.5;
+      const sub = pt.subtype || 'int_simples';
 
       ctx.save();
       ctx.rotate(angle);
       ctx.beginPath();
-      ctx.moveTo(-12, 0);
+      ctx.moveTo(-13, 0);
       ctx.lineTo(-r, 0);
       ctx.strokeStyle = '#34d399';
       ctx.lineWidth = 1.8;
@@ -2047,24 +2556,57 @@ window.CAD2D = (function () {
 
       ctx.beginPath();
       ctx.arc(0, 0, r, 0, Math.PI * 2);
-      ctx.fillStyle = '#0b1120';
+      ctx.fillStyle = sub === 'int_3way' ? '#34d399' : '#0b1120';
       ctx.fill();
       ctx.strokeStyle = '#34d399';
       ctx.lineWidth = 2;
       ctx.stroke();
 
+      if (sub === 'int_4way') {
+        // Metade sombreada (Intermediário Four-Way NBR 5444)
+        ctx.beginPath();
+        ctx.arc(0, 0, r, -Math.PI / 2, Math.PI / 2);
+        ctx.closePath();
+        ctx.fillStyle = '#34d399';
+        ctx.fill();
+      } else if (sub === 'int_duplo') {
+        // Linha diametral (2 seções)
+        ctx.beginPath();
+        ctx.moveTo(-r, 0);
+        ctx.lineTo(r, 0);
+        ctx.stroke();
+      } else if (sub === 'int_triplo') {
+        // 3 raios a 120° (3 seções)
+        for (let a = 0; a < 3; a++) {
+          const ang = (a * Math.PI * 2) / 3 - Math.PI / 2;
+          ctx.beginPath();
+          ctx.moveTo(0, 0);
+          ctx.lineTo(Math.cos(ang) * r, Math.sin(ang) * r);
+          ctx.stroke();
+        }
+      } else if (sub === 'int_campainha') {
+        // Ponto concêntrico (Pulsador de Campainha)
+        ctx.beginPath();
+        ctx.arc(0, 0, 3, 0, Math.PI * 2);
+        ctx.fillStyle = '#fde047';
+        ctx.fill();
+      }
+
       if (layers.labels) {
-        ctx.fillStyle = '#6ee7b7';
-        ctx.font = '700 9.5px JetBrains Mono, monospace';
+        ctx.fillStyle = sub === 'int_3way' ? '#fef08a' : '#6ee7b7';
+        ctx.font = '700 8.5px JetBrains Mono, monospace';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(pt.command || 'a', 0, 0.5);
+        const tag = sub === 'int_3way' ? `3w ${pt.command || 'a'}` : sub === 'int_4way' ? `4w ${pt.command || 'a'}` : (pt.command || 'a');
+        ctx.fillText(tag, 0, r + 9);
       }
     } else if (pt.category === 'tug' || pt.category === 'tue') {
+      // Símbolos NBR 5444 de Tomadas: Simples, Dupla (2x), Tripla (3x), Média e Alta (Item 14)
       const angle = getWallNormalAngle(pt);
       const isHigh = pt.category === 'tue' || Number(pt.z) >= 1.9;
-      const isMid = !isHigh && (Number(pt.z) >= 1.1 || Number(pt.powerVA) >= 600);
+      const isMid = !isHigh && (Number(pt.z) >= 1.1 || (Number(pt.powerVA) >= 600 && pt.subtype === 'tug_media'));
       const mainColor = isHigh ? '#f43f5e' : '#38bdf8';
+      const gangCount = pt.subtype === 'tug_tripla' ? 3 : pt.subtype === 'tug_dupla' ? 2 : 1;
 
       ctx.save();
       ctx.rotate(angle);
@@ -2072,54 +2614,190 @@ window.CAD2D = (function () {
       ctx.strokeStyle = mainColor;
       ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.moveTo(-11, -6);
-      ctx.lineTo(-11, 6);
+      ctx.moveTo(-11, -7);
+      ctx.lineTo(-11, 7);
       ctx.moveTo(-11, 0);
       ctx.lineTo(-6, 0);
       ctx.stroke();
 
-      ctx.beginPath();
-      ctx.moveTo(10, 0);
-      ctx.lineTo(-6, -8.5);
-      ctx.lineTo(-6, 8.5);
-      ctx.closePath();
-      ctx.fillStyle = '#0b1120';
-      ctx.fill();
-
-      if (isHigh) {
-        ctx.fillStyle = mainColor;
-        ctx.fill();
-      } else if (isMid) {
+      const drawSingleTriangle = (offsetY, scaleTri = 1) => {
         ctx.save();
+        ctx.translate(0, offsetY);
+        ctx.scale(scaleTri, scaleTri);
         ctx.beginPath();
         ctx.moveTo(10, 0);
-        ctx.lineTo(-6, -8.5);
-        ctx.lineTo(-6, 0);
+        ctx.lineTo(-6, -8);
+        ctx.lineTo(-6, 8);
         ctx.closePath();
-        ctx.fillStyle = mainColor;
+        ctx.fillStyle = '#0b1120';
         ctx.fill();
+        if (isHigh) {
+          ctx.fillStyle = mainColor;
+          ctx.fill();
+        } else if (isMid) {
+          ctx.beginPath();
+          ctx.moveTo(10, 0);
+          ctx.lineTo(-6, -8);
+          ctx.lineTo(-6, 0);
+          ctx.closePath();
+          ctx.fillStyle = mainColor;
+          ctx.fill();
+        }
+        ctx.beginPath();
+        ctx.moveTo(10, 0);
+        ctx.lineTo(-6, -8);
+        ctx.lineTo(-6, 8);
+        ctx.closePath();
+        ctx.strokeStyle = isHigh ? '#fda4af' : mainColor;
+        ctx.lineWidth = 2;
+        ctx.stroke();
         ctx.restore();
-      }
+      };
 
-      ctx.beginPath();
-      ctx.moveTo(10, 0);
-      ctx.lineTo(-6, -8.5);
-      ctx.lineTo(-6, 8.5);
-      ctx.closePath();
-      ctx.strokeStyle = isHigh ? '#fda4af' : mainColor;
-      ctx.lineWidth = 2;
-      ctx.stroke();
+      if (gangCount === 1) {
+        drawSingleTriangle(0, 1);
+      } else if (gangCount === 2) {
+        drawSingleTriangle(-5.5, 0.78);
+        drawSingleTriangle(5.5, 0.78);
+      } else {
+        drawSingleTriangle(-8, 0.68);
+        drawSingleTriangle(0, 0.68);
+        drawSingleTriangle(8, 0.68);
+      }
       ctx.restore();
 
       if (layers.labels) {
-        const vx = Math.cos(angle) * 21;
-        const vy = Math.sin(angle) * 21;
+        const vx = Math.cos(angle) * 23;
+        const vy = Math.sin(angle) * 23;
         ctx.fillStyle = isHigh ? '#fda4af' : '#bae6fd';
-        ctx.font = '700 9px JetBrains Mono, monospace';
+        ctx.font = '700 8.5px JetBrains Mono, monospace';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        const pTxt = Number(pt.powerVA) > 100 ? `${pt.powerVA}VA ` : '';
-        ctx.fillText(`${pTxt}${pt.circuitId || ''}`.trim(), vx, vy);
+        const multTxt = gangCount > 1 ? `${gangCount}x ` : '';
+        const pTxt = Number(pt.powerVA) > 100 && gangCount === 1 ? `${pt.powerVA}VA ` : '';
+        ctx.fillText(`${multTxt}${pTxt}${pt.circuitId || ''}`.trim(), vx, vy);
+      }
+    } else if (pt.category === 'telecom') {
+      // Tomada de Dados RJ45 / Rede e Telefone RJ11 (Item 23)
+      const angle = getWallNormalAngle(pt);
+      const isData = pt.subtype === 'tomada_rede';
+      ctx.save();
+      ctx.rotate(angle);
+      ctx.strokeStyle = '#06b6d4';
+      ctx.fillStyle = isData ? '#06b6d4' : '#0b1120';
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      ctx.moveTo(-10, -6);
+      ctx.lineTo(-10, 6);
+      ctx.moveTo(-10, 0);
+      ctx.lineTo(-5, 0);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(9, 0);
+      ctx.lineTo(-5, -7.5);
+      ctx.lineTo(-5, 7.5);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+      if (layers.labels) {
+        ctx.fillStyle = '#67e8f9';
+        ctx.font = '700 8px JetBrains Mono, monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText(isData ? 'RJ45' : 'RJ11', 0, -14);
+      }
+    } else if (pt.category === 'bell') {
+      // Campainha / Cigarra (Item 24)
+      ctx.fillStyle = '#0b1120';
+      ctx.strokeStyle = '#fbbf24';
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      ctx.arc(0, 0, 8, -Math.PI / 2, Math.PI / 2);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      ctx.strokeRect(-8, -5, 8, 10);
+      if (layers.labels) {
+        ctx.fillStyle = '#fde68a';
+        ctx.font = '700 8px JetBrains Mono, monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('CAMP', 0, -13);
+      }
+    } else if (pt.category === 'camera') {
+      // Ponto de Câmera CFTV (Item 25)
+      const angle = getWallNormalAngle(pt);
+      ctx.save();
+      ctx.rotate(angle);
+      ctx.fillStyle = '#0b1120';
+      ctx.strokeStyle = '#f43f5e';
+      ctx.lineWidth = 1.8;
+      ctx.fillRect(-8, -5, 13, 10);
+      ctx.strokeRect(-8, -5, 13, 10);
+      // Cone de lente
+      ctx.beginPath();
+      ctx.moveTo(5, -3);
+      ctx.lineTo(12, -7);
+      ctx.lineTo(12, 7);
+      ctx.lineTo(5, 3);
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(244, 63, 94, 0.35)';
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+      if (layers.labels) {
+        ctx.fillStyle = '#fda4af';
+        ctx.font = '700 8px JetBrains Mono, monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText(pt.label || 'CAM', 0, -13);
+      }
+    } else if (pt.category === 'jbox') {
+      // Caixa de Passagem (Item 26)
+      ctx.fillStyle = '#0b1120';
+      ctx.strokeStyle = '#94a3b8';
+      ctx.lineWidth = 1.8;
+      ctx.fillRect(-8, -8, 16, 16);
+      ctx.strokeRect(-8, -8, 16, 16);
+      ctx.beginPath();
+      ctx.moveTo(-8, -8);
+      ctx.lineTo(8, 8);
+      ctx.moveTo(8, -8);
+      ctx.lineTo(-8, 8);
+      ctx.stroke();
+      if (layers.labels) {
+        ctx.fillStyle = '#cbd5e1';
+        ctx.font = '700 8px JetBrains Mono, monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('CP', 0, -12);
+      }
+    } else if (pt.category === 'riser') {
+      // Eletroduto que Sobe (↗) ou Desce (↘) (Item 17)
+      const isUp = pt.subtype === 'conduit_sobe';
+      ctx.fillStyle = '#0b1120';
+      ctx.strokeStyle = '#f59e0b';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(0, 0, 7, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      if (isUp) {
+        ctx.lineTo(12, -12);
+        ctx.lineTo(6, -12);
+        ctx.moveTo(12, -12);
+        ctx.lineTo(12, -6);
+      } else {
+        ctx.lineTo(12, 12);
+        ctx.lineTo(6, 12);
+        ctx.moveTo(12, 12);
+        ctx.lineTo(12, 6);
+      }
+      ctx.stroke();
+      if (layers.labels) {
+        ctx.fillStyle = '#fde68a';
+        ctx.font = '700 8px JetBrains Mono, monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText(isUp ? 'SOBE' : 'DESCE', 0, -13);
       }
     }
 
@@ -2134,6 +2812,14 @@ window.CAD2D = (function () {
 
     c.fillStyle = '#070b14';
     c.fillRect(0, 0, w, h);
+
+    if (proj.rooms.length === 0) {
+      c.fillStyle = '#64748b';
+      c.font = '600 12px Inter, sans-serif';
+      c.textAlign = 'center';
+      c.fillText('Projeto em Branco (Clique para desenhar)', w / 2, h / 2);
+      return;
+    }
 
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     proj.rooms.forEach(r => {
@@ -2201,7 +2887,10 @@ window.CAD2D = (function () {
     selectById,
     setTool,
     setLayerVisible,
+    setGridVisible,
     setBackgroundFloorplan,
+    removeBackgroundFloorplan,
+    clearAllProject,
     fitToView,
     zoomBy,
     pushHistorySnapshot,

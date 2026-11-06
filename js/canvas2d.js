@@ -48,6 +48,14 @@ window.CAD2D = (function () {
   // Imagem/Planta importada de fundo (por projeto)
   let backgroundOverlayImg = null;
 
+  // Trava de movimentação dos cômodos (evita arrastar cômodos ao clicar)
+  let lockRooms = false;
+
+  function isRoomLocked(room) {
+    if (!room) return lockRooms;
+    return Boolean(lockRooms || room.locked);
+  }
+
   // Camadas visíveis
   const layers = {
     grid: true,
@@ -85,6 +93,7 @@ window.CAD2D = (function () {
       if (!Array.isArray(project.stairs)) project.stairs = [];
       // Carrega planta DXF/Imagem exclusiva deste projeto (Item 12)
       loadProjectBackgroundImage(project.backgroundFloorplanDataUrl || null);
+      lockRooms = Boolean(project.lockRooms);
     } else {
       backgroundOverlayImg = null;
     }
@@ -685,7 +694,7 @@ window.CAD2D = (function () {
     if (!project || !selectedItem) return null;
     if (selectedItem.kind === 'room') {
       const room = project.rooms.find(r => r.id === selectedItem.id);
-      if (!room) return null;
+      if (!room || isRoomLocked(room)) return null;
       const handles = getRoomResizeHandles(room);
       for (const h of handles) {
         if (Math.hypot(sx - h.x, sy - h.y) <= 11) {
@@ -1030,7 +1039,7 @@ window.CAD2D = (function () {
     if (handle && selectedItem) {
       if (selectedItem.kind === 'room') {
         const room = project.rooms.find(r => r.id === selectedItem.id);
-        if (room) {
+        if (room && !isRoomLocked(room)) {
           pendingDragSnapshot = captureStateSnapshot();
           isDragging = true;
           dragType = 'resize_room';
@@ -1130,14 +1139,16 @@ window.CAD2D = (function () {
     // 10. Cômodo / Ambiente
     const hitRoom = findRoomAtWorld(world.x, world.y);
     if (hitRoom) {
-      pendingDragSnapshot = captureStateSnapshot();
       selectedItem = { kind: 'room', id: hitRoom.id };
-      isDragging = true;
-      dragType = 'room';
-      dragInitialRoom = { x: hitRoom.x, y: hitRoom.y, w: hitRoom.w, h: hitRoom.h };
-      snapshotRoomPoints(hitRoom);
       onSelectionChange(selectedItem);
       notifyStateChange();
+      if (!isRoomLocked(hitRoom)) {
+        pendingDragSnapshot = captureStateSnapshot();
+        isDragging = true;
+        dragType = 'room';
+        dragInitialRoom = { x: hitRoom.x, y: hitRoom.y, w: hitRoom.w, h: hitRoom.h };
+        snapshotRoomPoints(hitRoom);
+      }
       render();
       return;
     }
@@ -1960,9 +1971,9 @@ window.CAD2D = (function () {
 
     if (layers.labels) {
       ctx.fillStyle = '#fde68a';
-      ctx.font = '700 9.5px JetBrains Mono, monospace';
+      ctx.font = '700 19px JetBrains Mono, monospace';
       ctx.textAlign = 'center';
-      ctx.fillText(`${st.label || 'ESCADA'} (${type.toUpperCase()})`, pos.x + sw / 2, pos.y - 6);
+      ctx.fillText(`${st.label || 'ESCADA'} (${type.toUpperCase()})`, pos.x + sw / 2, pos.y - 10);
     }
     ctx.restore();
   }
@@ -1977,7 +1988,7 @@ window.CAD2D = (function () {
 
     ctx.save();
     ctx.strokeStyle = isSel ? '#fde047' : dm.isPreview ? '#38bdf8' : '#a855f7';
-    ctx.lineWidth = isSel ? 2.2 : 1.5;
+    ctx.lineWidth = isSel ? 2.5 : 1.8;
 
     ctx.beginPath();
     ctx.moveTo(s1.x, s1.y);
@@ -1990,10 +2001,10 @@ window.CAD2D = (function () {
       ctx.translate(pt.x, pt.y);
       ctx.rotate(angle);
       ctx.beginPath();
-      ctx.moveTo(0, -6);
-      ctx.lineTo(0, 6);
-      ctx.moveTo(-4, 4);
-      ctx.lineTo(4, -4);
+      ctx.moveTo(0, -9);
+      ctx.lineTo(0, 9);
+      ctx.moveTo(-6, 6);
+      ctx.lineTo(6, -6);
       ctx.stroke();
       ctx.restore();
     });
@@ -2007,11 +2018,11 @@ window.CAD2D = (function () {
 
     const lbl = `${distMeters.toFixed(2)} m`;
     ctx.fillStyle = '#0f172a';
-    ctx.fillRect(-26, -16, 52, 14);
+    ctx.fillRect(-48, -26, 96, 24);
     ctx.fillStyle = isSel ? '#fde047' : '#e9d5ff';
-    ctx.font = '700 10px JetBrains Mono, monospace';
+    ctx.font = '700 20px JetBrains Mono, monospace';
     ctx.textAlign = 'center';
-    ctx.fillText(lbl, 0, -5);
+    ctx.fillText(lbl, 0, -8);
     ctx.restore();
   }
 
@@ -2019,25 +2030,25 @@ window.CAD2D = (function () {
   function drawCustomText2D(tx) {
     const s = worldToScreen(tx.x, tx.y);
     const isSel = selectedItem && selectedItem.kind === 'text' && selectedItem.id === tx.id;
-    const fSize = Number(tx.fontSize || 12);
+    const fSize = Number(tx.fontSize ? tx.fontSize * 2 : 24);
 
     ctx.save();
     ctx.font = `700 ${fSize}px Inter, sans-serif`;
     const str = tx.text || 'Nota';
-    const tw = ctx.measureText(str).width + 14;
+    const tw = ctx.measureText(str).width + 20;
 
-    ctx.fillStyle = isSel ? 'rgba(245, 158, 11, 0.25)' : 'rgba(15, 23, 42, 0.84)';
+    ctx.fillStyle = isSel ? 'rgba(245, 158, 11, 0.25)' : 'rgba(15, 23, 42, 0.88)';
     ctx.strokeStyle = isSel ? '#f59e0b' : '#475569';
-    ctx.lineWidth = isSel ? 1.8 : 1.1;
+    ctx.lineWidth = isSel ? 2.2 : 1.4;
     ctx.beginPath();
-    ctx.roundRect(s.x - tw / 2, s.y - fSize, tw, fSize + 10, 4);
+    ctx.roundRect(s.x - tw / 2, s.y - fSize, tw, fSize + 14, 6);
     ctx.fill();
     ctx.stroke();
 
     ctx.fillStyle = tx.color || '#fde047';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(str, s.x, s.y - fSize / 2 + 5);
+    ctx.fillText(str, s.x, s.y - fSize / 2 + 6);
     ctx.restore();
   }
 
@@ -2071,22 +2082,23 @@ window.CAD2D = (function () {
     const area = (room.w * room.h).toFixed(2);
     const perim = (2 * (room.w + room.h)).toFixed(2);
 
+    const isLocked = isRoomLocked(room);
     ctx.fillStyle = isSelected ? '#fde68a' : 'rgba(241, 245, 249, 0.90)';
-    ctx.font = '700 11.5px Inter, sans-serif';
+    ctx.font = '700 23px Inter, sans-serif';
     ctx.textAlign = 'left';
-    ctx.fillText(room.name.toUpperCase(), pos.x + 12, pos.y + 22);
+    ctx.fillText((isLocked ? '🔒 ' : '') + room.name.toUpperCase(), pos.x + 14, pos.y + 28);
 
     ctx.fillStyle = isSelected ? '#fbbf24' : 'rgba(148, 163, 184, 0.85)';
-    ctx.font = '600 10px JetBrains Mono, monospace';
-    ctx.fillText(`A=${area}m²  P=${perim}m`, pos.x + 12, pos.y + 36);
+    ctx.font = '600 20px JetBrains Mono, monospace';
+    ctx.fillText(`A=${area}m²  P=${perim}m`, pos.x + 14, pos.y + 54);
 
     if (layers.dimensions) {
       ctx.fillStyle = isSelected ? '#f59e0b' : '#64748b';
-      ctx.font = '700 10.5px JetBrains Mono, monospace';
+      ctx.font = '700 21px JetBrains Mono, monospace';
       ctx.textAlign = 'center';
-      ctx.fillText(`${room.w.toFixed(2)} m`, pos.x + rw / 2, pos.y + 13);
+      ctx.fillText(`${room.w.toFixed(2)} m`, pos.x + rw / 2, pos.y + 20);
       ctx.save();
-      ctx.translate(pos.x + 13, pos.y + rh / 2 + 12);
+      ctx.translate(pos.x + 20, pos.y + rh / 2 + 12);
       ctx.rotate(-Math.PI / 2);
       ctx.fillText(`${room.h.toFixed(2)} m`, 0, 0);
       ctx.restore();
@@ -2219,10 +2231,10 @@ window.CAD2D = (function () {
     // Etiqueta técnica da esquadria/abertura (ex: P1 0.80×2.10 | J1 1.40×1.10)
     if (layers.labels) {
       ctx.save();
-      const tx = sc.x - geom.nx * 14;
-      const ty = sc.y - geom.ny * 14;
+      const tx = sc.x - geom.nx * 22;
+      const ty = sc.y - geom.ny * 22;
       ctx.fillStyle = isSelected ? '#fde047' : op.type === 'window' ? '#7dd3fc' : op.type === 'opening' ? '#d8b4fe' : '#fde68a';
-      ctx.font = '700 9px JetBrains Mono, monospace';
+      ctx.font = '700 18px JetBrains Mono, monospace';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       const dimTxt = `${op.label || ''} (${geom.width.toFixed(2)}×${Number(op.height || 2.1).toFixed(2)})`.trim();
@@ -2249,46 +2261,51 @@ window.CAD2D = (function () {
   }
 
   function drawRoomSelectionHandles(room) {
-    const handles = getRoomResizeHandles(room);
+    const locked = isRoomLocked(room);
+    const handles = locked ? [] : getRoomResizeHandles(room);
     ctx.save();
 
     const pos = worldToScreen(room.x, room.y);
     const rw = room.w * scale;
     const rh = room.h * scale;
     ctx.setLineDash([6, 4]);
-    ctx.strokeStyle = '#fbbf24';
+    ctx.strokeStyle = locked ? '#ef4444' : '#fbbf24';
     ctx.lineWidth = 1.8;
     ctx.strokeRect(pos.x - 2, pos.y - 2, rw + 4, rh + 4);
     ctx.setLineDash([]);
 
-    handles.forEach(h => {
-      const isHover = hoveredHandle === h.id || activeResizeHandle === h.id;
-      const sz = isHover ? 11 : 9;
-      ctx.fillStyle = isHover ? '#38bdf8' : '#f59e0b';
-      ctx.strokeStyle = '#0f172a';
-      ctx.lineWidth = 2;
-      ctx.fillRect(h.x - sz / 2, h.y - sz / 2, sz, sz);
-      ctx.strokeRect(h.x - sz / 2, h.y - sz / 2, sz, sz);
-    });
+    if (!locked) {
+      handles.forEach(h => {
+        const isHover = hoveredHandle === h.id || activeResizeHandle === h.id;
+        const sz = isHover ? 11 : 9;
+        ctx.fillStyle = isHover ? '#38bdf8' : '#f59e0b';
+        ctx.strokeStyle = '#0f172a';
+        ctx.lineWidth = 2;
+        ctx.fillRect(h.x - sz / 2, h.y - sz / 2, sz, sz);
+        ctx.strokeRect(h.x - sz / 2, h.y - sz / 2, sz, sz);
+      });
+    }
 
-    const badgeText = `${room.name}: ${room.w.toFixed(2)}m × ${room.h.toFixed(2)}m (${(room.w * room.h).toFixed(2)} m²) — Arraste alças ou use Ctrl+C / Ctrl+V`;
-    ctx.font = '700 10.5px Inter, sans-serif';
-    const tw = ctx.measureText(badgeText).width + 18;
+    const badgeText = locked
+      ? `🔒 [TRAVADO] ${room.name}: ${room.w.toFixed(2)}m × ${room.h.toFixed(2)}m (${(room.w * room.h).toFixed(2)} m²) — Posição travada contra movimentação`
+      : `${room.name}: ${room.w.toFixed(2)}m × ${room.h.toFixed(2)}m (${(room.w * room.h).toFixed(2)} m²) — Arraste alças ou use Ctrl+C / Ctrl+V`;
+    ctx.font = '700 21px Inter, sans-serif';
+    const tw = ctx.measureText(badgeText).width + 24;
     const bx = pos.x + rw / 2 - tw / 2;
-    const by = pos.y - 28;
+    const by = pos.y - 48;
 
-    ctx.fillStyle = 'rgba(15, 23, 42, 0.92)';
-    ctx.strokeStyle = '#f59e0b';
-    ctx.lineWidth = 1.4;
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.94)';
+    ctx.strokeStyle = locked ? '#ef4444' : '#f59e0b';
+    ctx.lineWidth = 1.8;
     ctx.beginPath();
-    ctx.roundRect(bx, by, tw, 20, 4);
+    ctx.roundRect(bx, by, tw, 36, 6);
     ctx.fill();
     ctx.stroke();
 
-    ctx.fillStyle = '#fde68a';
+    ctx.fillStyle = locked ? '#fca5a5' : '#fde68a';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(badgeText, pos.x + rw / 2, by + 10);
+    ctx.fillText(badgeText, pos.x + rw / 2, by + 18);
 
     ctx.restore();
   }
@@ -2368,28 +2385,31 @@ window.CAD2D = (function () {
       ctx.rotate(angle);
 
       ctx.strokeStyle = '#f8fafc';
-      ctx.lineWidth = 1.45;
+      ctx.lineWidth = 1.8;
 
       if (isSwitchBranch) {
-        drawConductorTick(ctx, -3.5, 'fase');
-        drawConductorTick(ctx, 3.5, 'retorno');
-      } else if (isBiphasic) {
         drawConductorTick(ctx, -5, 'fase');
+        drawConductorTick(ctx, 5, 'retorno');
+      } else if (isBiphasic) {
+        drawConductorTick(ctx, -7, 'fase');
         drawConductorTick(ctx, 0, 'fase');
-        drawConductorTick(ctx, 5, 'terra');
+        drawConductorTick(ctx, 7, 'terra');
       } else {
-        drawConductorTick(ctx, -5, 'neutro');
+        drawConductorTick(ctx, -7, 'neutro');
         drawConductorTick(ctx, 0, 'fase');
-        drawConductorTick(ctx, 5, 'terra');
+        drawConductorTick(ctx, 7, 'terra');
       }
 
       const tagTxt = isTray
         ? `${targetPt.circuitId || ''} Calha 100x50`.trim()
         : `${targetPt.circuitId || ''} #${secMm2}mm² Ø${diam}mm`.trim();
+      ctx.font = '700 16px JetBrains Mono, monospace';
+      const tw = ctx.measureText(tagTxt).width + 14;
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.88)';
+      ctx.fillRect(-tw / 2, 8, tw, 22);
       ctx.fillStyle = isTray ? '#6ee7b7' : '#cbd5e1';
-      ctx.font = '600 8px JetBrains Mono, monospace';
       ctx.textAlign = 'center';
-      ctx.fillText(tagTxt, 0, 14);
+      ctx.fillText(tagTxt, 0, 24);
 
       ctx.restore();
     }
@@ -2463,36 +2483,37 @@ window.CAD2D = (function () {
 
       if (layers.labels) {
         ctx.fillStyle = isPartial ? '#e9d5ff' : '#fde68a';
-        ctx.font = '700 10px JetBrains Mono, monospace';
+        ctx.font = '700 20px JetBrains Mono, monospace';
         ctx.textAlign = 'center';
-        ctx.fillText(pt.label || (isPartial ? 'QD-Parcial' : 'QDC'), 0, -15);
+        ctx.fillText(pt.label || (isPartial ? 'QD-Parcial' : 'QDC'), 0, -22);
       }
     } else if (pt.category === 'padrao') {
       // Símbolo Padrão de Entrada da Concessionária (Caixa Medidor kWh + Poste) (Item 6)
       ctx.fillStyle = '#0b1120';
       ctx.strokeStyle = '#f59e0b';
-      ctx.lineWidth = 2.2;
-      ctx.fillRect(-14, -14, 28, 28);
-      ctx.strokeRect(-14, -14, 28, 28);
+      ctx.lineWidth = 2.4;
+      ctx.fillRect(-18, -18, 36, 36);
+      ctx.strokeRect(-18, -18, 36, 36);
       ctx.beginPath();
-      ctx.arc(0, 0, 9, 0, Math.PI * 2);
+      ctx.arc(0, 0, 12, 0, Math.PI * 2);
       ctx.stroke();
       ctx.fillStyle = '#fde68a';
-      ctx.font = '800 7.5px JetBrains Mono, monospace';
+      ctx.font = '800 15px JetBrains Mono, monospace';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText('kWh', 0, 0.5);
       if (layers.labels) {
-        ctx.fillText(pt.label || 'Padrão Entrada', 0, -20);
+        ctx.font = '700 18px JetBrains Mono, monospace';
+        ctx.fillText(pt.label || 'Padrão Entrada', 0, -28);
       }
     } else if (pt.category === 'light') {
-      const r = 16;
+      const r = 22;
       ctx.beginPath();
       ctx.arc(0, 0, r, 0, Math.PI * 2);
       ctx.fillStyle = '#0b1120';
       ctx.fill();
       ctx.strokeStyle = '#fbbf24';
-      ctx.lineWidth = 2;
+      ctx.lineWidth = 2.2;
       ctx.stroke();
 
       ctx.beginPath();
@@ -2501,56 +2522,57 @@ window.CAD2D = (function () {
       ctx.moveTo(0, 0);
       ctx.lineTo(0, r);
       ctx.strokeStyle = 'rgba(251, 191, 36, 0.85)';
-      ctx.lineWidth = 1.3;
+      ctx.lineWidth = 1.5;
       ctx.stroke();
 
       ctx.fillStyle = '#fef3c7';
-      ctx.font = '700 8.5px JetBrains Mono, monospace';
+      ctx.font = '700 17px JetBrains Mono, monospace';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(`${pt.powerVA || 100}`, 0, -r * 0.45);
+      ctx.fillText(`${pt.powerVA || 100}`, 0, -r * 0.48);
 
-      ctx.font = '700 7.5px JetBrains Mono, monospace';
+      ctx.font = '700 15px JetBrains Mono, monospace';
       ctx.fillStyle = '#38bdf8';
-      ctx.fillText((pt.circuitId || 'C1').replace('C', ''), -r * 0.42, r * 0.44);
+      ctx.fillText((pt.circuitId || 'C1').replace('C', ''), -r * 0.44, r * 0.48);
 
       ctx.fillStyle = '#34d399';
-      ctx.fillText(pt.command || 'a', r * 0.42, r * 0.44);
+      ctx.fillText(pt.command || 'a', r * 0.44, r * 0.48);
     } else if (pt.category === 'sensor') {
       // Símbolo Sensor de Presença (Item 22)
-      const r = 11;
+      const r = 14;
       ctx.beginPath();
       ctx.arc(0, 0, r, 0, Math.PI * 2);
       ctx.fillStyle = '#0b1120';
       ctx.fill();
       ctx.strokeStyle = '#10b981';
-      ctx.lineWidth = 2;
+      ctx.lineWidth = 2.2;
       ctx.stroke();
       // Ondas de detecção PIR
       ctx.beginPath();
-      ctx.arc(0, 0, r + 4, -Math.PI * 0.35, Math.PI * 0.35);
+      ctx.arc(0, 0, r + 5, -Math.PI * 0.35, Math.PI * 0.35);
       ctx.stroke();
       ctx.fillStyle = '#6ee7b7';
-      ctx.font = '700 8px JetBrains Mono, monospace';
+      ctx.font = '700 16px JetBrains Mono, monospace';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText('SP', 0, 0.5);
       if (layers.labels) {
-        ctx.fillText(pt.command || 'a1', 0, r + 10);
+        ctx.font = '700 16px JetBrains Mono, monospace';
+        ctx.fillText(pt.command || 'a1', 0, r + 15);
       }
     } else if (pt.category === 'switch') {
       // Símbolos NBR 5444 de Interruptores: Simples (1S), Duplo (2S), Triplo (3S), Three-Way (S3w), Four-Way (S4w), Pulsador Campainha (Items 21 e 24)
       const angle = getWallNormalAngle(pt);
-      const r = 8.5;
+      const r = 11;
       const sub = pt.subtype || 'int_simples';
 
       ctx.save();
       ctx.rotate(angle);
       ctx.beginPath();
-      ctx.moveTo(-13, 0);
+      ctx.moveTo(-16, 0);
       ctx.lineTo(-r, 0);
       ctx.strokeStyle = '#34d399';
-      ctx.lineWidth = 1.8;
+      ctx.lineWidth = 2;
       ctx.stroke();
       ctx.restore();
 
@@ -2559,7 +2581,7 @@ window.CAD2D = (function () {
       ctx.fillStyle = sub === 'int_3way' ? '#34d399' : '#0b1120';
       ctx.fill();
       ctx.strokeStyle = '#34d399';
-      ctx.lineWidth = 2;
+      ctx.lineWidth = 2.2;
       ctx.stroke();
 
       if (sub === 'int_4way') {
@@ -2587,18 +2609,18 @@ window.CAD2D = (function () {
       } else if (sub === 'int_campainha') {
         // Ponto concêntrico (Pulsador de Campainha)
         ctx.beginPath();
-        ctx.arc(0, 0, 3, 0, Math.PI * 2);
+        ctx.arc(0, 0, 4, 0, Math.PI * 2);
         ctx.fillStyle = '#fde047';
         ctx.fill();
       }
 
       if (layers.labels) {
         ctx.fillStyle = sub === 'int_3way' ? '#fef08a' : '#6ee7b7';
-        ctx.font = '700 8.5px JetBrains Mono, monospace';
+        ctx.font = '700 17px JetBrains Mono, monospace';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         const tag = sub === 'int_3way' ? `3w ${pt.command || 'a'}` : sub === 'int_4way' ? `4w ${pt.command || 'a'}` : (pt.command || 'a');
-        ctx.fillText(tag, 0, r + 9);
+        ctx.fillText(tag, 0, r + 15);
       }
     } else if (pt.category === 'tug' || pt.category === 'tue') {
       // Símbolos NBR 5444 de Tomadas: Simples, Dupla (2x), Tripla (3x), Média e Alta (Item 14)
@@ -2612,12 +2634,12 @@ window.CAD2D = (function () {
       ctx.rotate(angle);
 
       ctx.strokeStyle = mainColor;
-      ctx.lineWidth = 2;
+      ctx.lineWidth = 2.2;
       ctx.beginPath();
-      ctx.moveTo(-11, -7);
-      ctx.lineTo(-11, 7);
-      ctx.moveTo(-11, 0);
-      ctx.lineTo(-6, 0);
+      ctx.moveTo(-13, -8);
+      ctx.lineTo(-13, 8);
+      ctx.moveTo(-13, 0);
+      ctx.lineTo(-7, 0);
       ctx.stroke();
 
       const drawSingleTriangle = (offsetY, scaleTri = 1) => {
@@ -2625,9 +2647,9 @@ window.CAD2D = (function () {
         ctx.translate(0, offsetY);
         ctx.scale(scaleTri, scaleTri);
         ctx.beginPath();
-        ctx.moveTo(10, 0);
-        ctx.lineTo(-6, -8);
-        ctx.lineTo(-6, 8);
+        ctx.moveTo(11, 0);
+        ctx.lineTo(-7, -9);
+        ctx.lineTo(-7, 9);
         ctx.closePath();
         ctx.fillStyle = '#0b1120';
         ctx.fill();
@@ -2636,41 +2658,41 @@ window.CAD2D = (function () {
           ctx.fill();
         } else if (isMid) {
           ctx.beginPath();
-          ctx.moveTo(10, 0);
-          ctx.lineTo(-6, -8);
-          ctx.lineTo(-6, 0);
+          ctx.moveTo(11, 0);
+          ctx.lineTo(-7, -9);
+          ctx.lineTo(-7, 0);
           ctx.closePath();
           ctx.fillStyle = mainColor;
           ctx.fill();
         }
         ctx.beginPath();
-        ctx.moveTo(10, 0);
-        ctx.lineTo(-6, -8);
-        ctx.lineTo(-6, 8);
+        ctx.moveTo(11, 0);
+        ctx.lineTo(-7, -9);
+        ctx.lineTo(-7, 9);
         ctx.closePath();
         ctx.strokeStyle = isHigh ? '#fda4af' : mainColor;
-        ctx.lineWidth = 2;
+        ctx.lineWidth = 2.2;
         ctx.stroke();
         ctx.restore();
       };
 
       if (gangCount === 1) {
-        drawSingleTriangle(0, 1);
+        drawSingleTriangle(0, 1.1);
       } else if (gangCount === 2) {
-        drawSingleTriangle(-5.5, 0.78);
-        drawSingleTriangle(5.5, 0.78);
+        drawSingleTriangle(-6.5, 0.88);
+        drawSingleTriangle(6.5, 0.88);
       } else {
-        drawSingleTriangle(-8, 0.68);
-        drawSingleTriangle(0, 0.68);
-        drawSingleTriangle(8, 0.68);
+        drawSingleTriangle(-9.5, 0.78);
+        drawSingleTriangle(0, 0.78);
+        drawSingleTriangle(9.5, 0.78);
       }
       ctx.restore();
 
       if (layers.labels) {
-        const vx = Math.cos(angle) * 23;
-        const vy = Math.sin(angle) * 23;
+        const vx = Math.cos(angle) * 32;
+        const vy = Math.sin(angle) * 32;
         ctx.fillStyle = isHigh ? '#fda4af' : '#bae6fd';
-        ctx.font = '700 8.5px JetBrains Mono, monospace';
+        ctx.font = '700 17px JetBrains Mono, monospace';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         const multTxt = gangCount > 1 ? `${gangCount}x ` : '';
@@ -2685,43 +2707,43 @@ window.CAD2D = (function () {
       ctx.rotate(angle);
       ctx.strokeStyle = '#06b6d4';
       ctx.fillStyle = isData ? '#06b6d4' : '#0b1120';
-      ctx.lineWidth = 1.8;
+      ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.moveTo(-10, -6);
-      ctx.lineTo(-10, 6);
-      ctx.moveTo(-10, 0);
-      ctx.lineTo(-5, 0);
+      ctx.moveTo(-12, -7);
+      ctx.lineTo(-12, 7);
+      ctx.moveTo(-12, 0);
+      ctx.lineTo(-6, 0);
       ctx.stroke();
       ctx.beginPath();
-      ctx.moveTo(9, 0);
-      ctx.lineTo(-5, -7.5);
-      ctx.lineTo(-5, 7.5);
+      ctx.moveTo(10, 0);
+      ctx.lineTo(-6, -8.5);
+      ctx.lineTo(-6, 8.5);
       ctx.closePath();
       ctx.fill();
       ctx.stroke();
       ctx.restore();
       if (layers.labels) {
         ctx.fillStyle = '#67e8f9';
-        ctx.font = '700 8px JetBrains Mono, monospace';
+        ctx.font = '700 16px JetBrains Mono, monospace';
         ctx.textAlign = 'center';
-        ctx.fillText(isData ? 'RJ45' : 'RJ11', 0, -14);
+        ctx.fillText(isData ? 'RJ45' : 'RJ11', 0, -18);
       }
     } else if (pt.category === 'bell') {
       // Campainha / Cigarra (Item 24)
       ctx.fillStyle = '#0b1120';
       ctx.strokeStyle = '#fbbf24';
-      ctx.lineWidth = 1.8;
+      ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.arc(0, 0, 8, -Math.PI / 2, Math.PI / 2);
+      ctx.arc(0, 0, 10, -Math.PI / 2, Math.PI / 2);
       ctx.closePath();
       ctx.fill();
       ctx.stroke();
-      ctx.strokeRect(-8, -5, 8, 10);
+      ctx.strokeRect(-10, -6, 10, 12);
       if (layers.labels) {
         ctx.fillStyle = '#fde68a';
-        ctx.font = '700 8px JetBrains Mono, monospace';
+        ctx.font = '700 16px JetBrains Mono, monospace';
         ctx.textAlign = 'center';
-        ctx.fillText('CAMP', 0, -13);
+        ctx.fillText('CAMP', 0, -18);
       }
     } else if (pt.category === 'camera') {
       // Ponto de Câmera CFTV (Item 25)
@@ -2730,15 +2752,15 @@ window.CAD2D = (function () {
       ctx.rotate(angle);
       ctx.fillStyle = '#0b1120';
       ctx.strokeStyle = '#f43f5e';
-      ctx.lineWidth = 1.8;
-      ctx.fillRect(-8, -5, 13, 10);
-      ctx.strokeRect(-8, -5, 13, 10);
+      ctx.lineWidth = 2;
+      ctx.fillRect(-10, -6, 15, 12);
+      ctx.strokeRect(-10, -6, 15, 12);
       // Cone de lente
       ctx.beginPath();
-      ctx.moveTo(5, -3);
-      ctx.lineTo(12, -7);
-      ctx.lineTo(12, 7);
-      ctx.lineTo(5, 3);
+      ctx.moveTo(5, -4);
+      ctx.lineTo(14, -8);
+      ctx.lineTo(14, 8);
+      ctx.lineTo(5, 4);
       ctx.closePath();
       ctx.fillStyle = 'rgba(244, 63, 94, 0.35)';
       ctx.fill();
@@ -2746,58 +2768,58 @@ window.CAD2D = (function () {
       ctx.restore();
       if (layers.labels) {
         ctx.fillStyle = '#fda4af';
-        ctx.font = '700 8px JetBrains Mono, monospace';
+        ctx.font = '700 16px JetBrains Mono, monospace';
         ctx.textAlign = 'center';
-        ctx.fillText(pt.label || 'CAM', 0, -13);
+        ctx.fillText(pt.label || 'CAM', 0, -18);
       }
     } else if (pt.category === 'jbox') {
       // Caixa de Passagem (Item 26)
       ctx.fillStyle = '#0b1120';
       ctx.strokeStyle = '#94a3b8';
-      ctx.lineWidth = 1.8;
-      ctx.fillRect(-8, -8, 16, 16);
-      ctx.strokeRect(-8, -8, 16, 16);
+      ctx.lineWidth = 2;
+      ctx.fillRect(-10, -10, 20, 20);
+      ctx.strokeRect(-10, -10, 20, 20);
       ctx.beginPath();
-      ctx.moveTo(-8, -8);
-      ctx.lineTo(8, 8);
-      ctx.moveTo(8, -8);
-      ctx.lineTo(-8, 8);
+      ctx.moveTo(-10, -10);
+      ctx.lineTo(10, 10);
+      ctx.moveTo(10, -10);
+      ctx.lineTo(-10, 10);
       ctx.stroke();
       if (layers.labels) {
         ctx.fillStyle = '#cbd5e1';
-        ctx.font = '700 8px JetBrains Mono, monospace';
+        ctx.font = '700 16px JetBrains Mono, monospace';
         ctx.textAlign = 'center';
-        ctx.fillText('CP', 0, -12);
+        ctx.fillText('CP', 0, -18);
       }
     } else if (pt.category === 'riser') {
       // Eletroduto que Sobe (↗) ou Desce (↘) (Item 17)
       const isUp = pt.subtype === 'conduit_sobe';
       ctx.fillStyle = '#0b1120';
       ctx.strokeStyle = '#f59e0b';
-      ctx.lineWidth = 2;
+      ctx.lineWidth = 2.2;
       ctx.beginPath();
-      ctx.arc(0, 0, 7, 0, Math.PI * 2);
+      ctx.arc(0, 0, 9, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
       ctx.beginPath();
       ctx.moveTo(0, 0);
       if (isUp) {
-        ctx.lineTo(12, -12);
-        ctx.lineTo(6, -12);
-        ctx.moveTo(12, -12);
-        ctx.lineTo(12, -6);
+        ctx.lineTo(14, -14);
+        ctx.lineTo(7, -14);
+        ctx.moveTo(14, -14);
+        ctx.lineTo(14, -7);
       } else {
-        ctx.lineTo(12, 12);
-        ctx.lineTo(6, 12);
-        ctx.moveTo(12, 12);
-        ctx.lineTo(12, 6);
+        ctx.lineTo(14, 14);
+        ctx.lineTo(7, 14);
+        ctx.moveTo(14, 14);
+        ctx.lineTo(14, 7);
       }
       ctx.stroke();
       if (layers.labels) {
         ctx.fillStyle = '#fde68a';
-        ctx.font = '700 8px JetBrains Mono, monospace';
+        ctx.font = '700 16px JetBrains Mono, monospace';
         ctx.textAlign = 'center';
-        ctx.fillText(isUp ? 'SOBE' : 'DESCE', 0, -13);
+        ctx.fillText(isUp ? 'SOBE' : 'DESCE', 0, -18);
       }
     }
 
@@ -2815,7 +2837,7 @@ window.CAD2D = (function () {
 
     if (proj.rooms.length === 0) {
       c.fillStyle = '#64748b';
-      c.font = '600 12px Inter, sans-serif';
+      c.font = '600 24px Inter, sans-serif';
       c.textAlign = 'center';
       c.fillText('Projeto em Branco (Clique para desenhar)', w / 2, h / 2);
       return;
@@ -2906,6 +2928,34 @@ window.CAD2D = (function () {
     populateSingleRoomNormativePoints,
     render,
     renderProjectPreviewToCanvas,
-    getSelectedItem: () => selectedItem
+    getSelectedItem: () => selectedItem,
+    isRoomsLocked: () => lockRooms,
+    setLockRooms: (val) => {
+      lockRooms = Boolean(val);
+      if (project) project.lockRooms = lockRooms;
+      render();
+      return lockRooms;
+    },
+    toggleLockRooms: () => {
+      lockRooms = !lockRooms;
+      if (project) project.lockRooms = lockRooms;
+      render();
+      return lockRooms;
+    },
+    isRoomLocked: (roomIdOrRoom) => {
+      if (!roomIdOrRoom) return lockRooms;
+      const r = typeof roomIdOrRoom === 'string'
+        ? (project?.rooms || []).find(x => x.id === roomIdOrRoom)
+        : roomIdOrRoom;
+      return isRoomLocked(r);
+    },
+    setIndividualRoomLocked: (roomId, locked) => {
+      if (!project || !project.rooms) return;
+      const r = project.rooms.find(x => x.id === roomId);
+      if (r) {
+        r.locked = Boolean(locked);
+        render();
+      }
+    }
   };
 })();

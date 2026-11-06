@@ -456,6 +456,7 @@ window.App = (function () {
     requestAnimationFrame(() => {
       window.CAD2D.setProject(currentProject);
       window.Viewer3D.setProject(currentProject);
+      updateLockRoomsUI(window.CAD2D.isRoomsLocked());
       if (currentProject.rooms && currentProject.rooms.length > 0) {
         window.CAD2D.selectById('room', currentProject.rooms[0].id, false);
       } else {
@@ -776,6 +777,53 @@ window.App = (function () {
     showToast(checkboxEl.checked ? 'Grid da planta 2D exibido.' : 'Grid da planta 2D ocultado.');
   }
 
+  function toggleLockRooms() {
+    const isLocked = window.CAD2D.toggleLockRooms();
+    updateLockRoomsUI(isLocked);
+    saveProjectsToStorage();
+    showToast(isLocked ? '🔒 Todos os cômodos foram travados contra movimentação!' : '🔓 Cômodos destravados para edição de posição!');
+  }
+
+  function setLockRooms(locked) {
+    const isLocked = window.CAD2D.setLockRooms(locked);
+    updateLockRoomsUI(isLocked);
+    saveProjectsToStorage();
+    showToast(isLocked ? '🔒 Todos os cômodos foram travados contra movimentação!' : '🔓 Cômodos destravados para edição de posição!');
+  }
+
+  function updateLockRoomsUI(isLocked) {
+    const btn = document.getElementById('btnLockRooms');
+    const txt = document.getElementById('btnLockRoomsText');
+    const chk = document.getElementById('chkLockRooms');
+    if (btn) {
+      if (isLocked) {
+        btn.classList.add('btn-locked');
+        btn.classList.remove('btn-secondary');
+      } else {
+        btn.classList.remove('btn-locked');
+        btn.classList.add('btn-secondary');
+      }
+    }
+    if (txt) {
+      txt.textContent = isLocked ? 'Destravar Cômodos' : 'Travar Cômodos';
+    }
+    if (chk) {
+      chk.checked = Boolean(isLocked);
+    }
+  }
+
+  function toggleRoomLock(roomId, locked) {
+    if (!currentProject || !currentProject.rooms) return;
+    const room = currentProject.rooms.find(r => r.id === roomId);
+    if (!room) return;
+    room.locked = locked !== undefined ? Boolean(locked) : !room.locked;
+    saveProjectsToStorage();
+    window.CAD2D.render();
+    renderPropertyInspector({ kind: 'room', id: roomId });
+    renderRoomsPanel();
+    showToast(room.locked ? `🔒 Cômodo "${room.name}" travado contra movimentação!` : `🔓 Cômodo "${room.name}" destravado!`);
+  }
+
   function clearAllCurrentProject() {
     if (!currentProject) return;
     window.CAD2D.clearAllProject();
@@ -1035,6 +1083,12 @@ window.App = (function () {
             <div>Área: <strong class="mono">${comp.area} m²</strong> | Perímetro: <strong class="mono">${comp.perimeter} m</strong></div>
             <div style="margin-top:4px;">Mín. Iluminação NBR: <strong class="mono">${comp.minLightingVA} VA</strong> (Atual: ${comp.installedLightingVA} VA)</div>
             <div>Mín. TUGs NBR: <strong class="mono">${comp.minTugCount} un / ${comp.minTugVA} VA</strong> (Atual: ${comp.installedTugCount} un / ${comp.installedTugVA} VA)</div>
+          </div>
+          <div class="form-group" style="background:var(--bg-primary); padding:8px 10px; border-radius:6px; border:1px solid ${room.locked ? 'rgba(239, 68, 68, 0.4)' : 'var(--border-subtle)'}; margin-bottom:10px;">
+            <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:12px; font-weight:600; margin:0; color:${room.locked ? '#f87171' : 'inherit'};">
+              <input type="checkbox" ${room.locked ? 'checked' : ''} onchange="App.toggleRoomLock('${room.id}', this.checked)" />
+              <span>🔒 Travar posição deste cômodo</span>
+            </label>
           </div>
           <div style="margin-bottom:10px;">
             <label style="display:block; font-size:11px; font-weight:700; color:var(--text-muted); margin-bottom:6px; text-transform:uppercase;">Inserir Abertura Neste Cômodo</label>
@@ -1717,6 +1771,9 @@ window.App = (function () {
               <span class="badge ${c.compliant ? 'badge-green' : 'badge-amber'}">
                 ${c.compliant ? 'OK' : 'Ajustar'}
               </span>
+              <button class="btn ${room.locked ? 'btn-accent' : 'btn-secondary'} btn-sm" onclick="App.toggleRoomLock('${room.id}', ${!room.locked})" title="${room.locked ? 'Destravar posição do cômodo' : 'Travar posição do cômodo contra movimentação'}">
+                ${room.locked ? '🔒 Travado' : '🔓 Destravar'}
+              </button>
               <button class="btn btn-secondary btn-sm" onclick="App.regenerateSingleRoomPoints('${room.id}')" title="Gerar pontos NBR 5410 para este ambiente">Gerar NBR</button>
               <button class="btn btn-danger btn-sm" onclick="App.deleteRoomById('${room.id}')" title="Excluir ambiente">✕</button>
             </div>
@@ -2310,6 +2367,9 @@ window.App = (function () {
     selectCadTool,
     toggleCadLayer,
     toggleCadGrid,
+    toggleLockRooms,
+    setLockRooms,
+    toggleRoomLock,
     clearAllCurrentProject,
     removeCurrentProjectFloorplan,
     exportCurrentProjectDXF,

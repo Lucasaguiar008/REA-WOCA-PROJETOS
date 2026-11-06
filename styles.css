@@ -1294,6 +1294,31 @@ body.light-theme .toolbar-btn:hover:not(:disabled) {
   box-shadow: 0 4px 12px rgba(245, 158, 11, 0.45);
 }
 
+.toolbar-pill-btn.btn-secondary {
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+}
+
+.toolbar-pill-btn.btn-secondary:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--border-hover);
+}
+
+.toolbar-pill-btn.btn-locked {
+  background: rgba(239, 68, 68, 0.16);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.45);
+  font-weight: 700;
+}
+
+.toolbar-pill-btn.btn-locked:hover {
+  background: rgba(239, 68, 68, 0.26);
+  color: #fca5a5;
+  border-color: rgba(239, 68, 68, 0.65);
+}
+
 .toolbar-pill-btn.btn-ghost-danger {
   background: transparent;
   color: var(--text-muted);
